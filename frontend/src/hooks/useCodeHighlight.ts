@@ -1,0 +1,212 @@
+import type { RefObject } from 'react'
+import { useEffect } from 'react'
+import type { HighlighterGeneric, BundledLanguage, BundledTheme } from 'shiki'
+
+type TransformerModule = typeof import('@shikijs/transformers')
+
+let highlighterPromise: Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> | null = null
+let transformerModulePromise: Promise<TransformerModule> | null = null
+const loadedLanguages = new Set<string>()
+
+const commonLanguages = [
+  'javascript',
+  'typescript',
+  'json',
+  'html',
+  'css',
+  'python',
+  'bash',
+  'shell',
+  'markdown',
+  'yaml',
+  'xml',
+  'sql',
+] as const
+
+async function getHighlighter() {
+  if (!highlighterPromise) {
+    highlighterPromise = (async () => {
+      const { createHighlighter } = await import('shiki')
+      const highlighter = await createHighlighter({
+        themes: ['github-light', 'github-dark'],
+        langs: [...commonLanguages],
+      })
+      for (const lang of commonLanguages) {
+        loadedLanguages.add(lang)
+      }
+      return highlighter
+    })()
+  }
+  return highlighterPromise
+}
+
+async function getTransformerModule() {
+  if (!transformerModulePromise) {
+    transformerModulePromise = import('@shikijs/transformers')
+  }
+  return transformerModulePromise
+}
+
+function normalizeLanguage(lang: string): string {
+  const aliases: Record<string, string> = {
+    js: 'javascript',
+    ts: 'typescript',
+    py: 'python',
+    sh: 'bash',
+    zsh: 'bash',
+    yml: 'yaml',
+    htm: 'html',
+    plaintext: 'text',
+    text: 'text',
+  }
+  return aliases[lang.toLowerCase()] || lang.toLowerCase()
+}
+
+function createCopyButton(code: string): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.className = 'flex items-center justify-center p-1 bg-transparent text-muted-foreground rounded transition-colors hover:text-foreground hover:bg-foreground/10'
+  button.type = 'button'
+  button.setAttribute('aria-label', 'Copy code')
+  button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+      button.classList.add('!text-green-500')
+      setTimeout(() => {
+        button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`
+        button.classList.remove('!text-green-500')
+      }, 2000)
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement('textarea')
+      textarea.value = code
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+  })
+
+  return button
+}
+
+export function useCodeHighlight(
+  containerRef: RefObject<HTMLElement | null>,
+  content: string
+) {
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const blocks = container.querySelectorAll('pre code')
+    if (blocks.length === 0) return
+
+    let cancelled = false
+
+    async function highlightBlocks() {
+      const [highlighter, transformerModule] = await Promise.all([
+        getHighlighter(),
+        getTransformerModule(),
+      ])
+      if (cancelled) return
+
+      for (const block of blocks) {
+        if (cancelled) break
+        if (!(block instanceof HTMLElement)) continue
+
+        const pre = block.parentElement
+        if (!(pre instanceof HTMLElement)) continue
+
+        if (pre.dataset.shikiHighlighted) continue
+
+        const match = /language-([a-z0-9_+-]+)/i.exec(block.className || '')
+        const rawLang = match ? match[1] : ''
+        const lang = normalizeLanguage(rawLang)
+
+        const code = block.textContent || ''
+        if (!code.trim()) continue
+
+        let effectiveLang = lang
+        if (lang && lang !== 'text') {
+          if (!loadedLanguages.has(lang)) {
+            try {
+              await highlighter.loadLanguage(lang as BundledLanguage)
+              loadedLanguages.add(lang)
+            } catch {
+              effectiveLang = 'text'
+            }
+          }
+        } else {
+          effectiveLang = 'text'
+        }
+
+        if (cancelled) break
+
+        try {
+          const html = highlighter.codeToHtml(code, {
+            lang: effectiveLang,
+            themes: {
+              light: 'github-light',
+              dark: 'github-dark',
+            },
+            defaultColor: false,
+            transformers: [
+              transformerModule.transformerNotationDiff(),
+              transformerModule.transformerNotationHighlight(),
+            ],
+          })
+
+          const temp = document.createElement('div')
+          temp.innerHTML = html
+          const newPre = temp.querySelector('pre')
+          if (newPre) {
+            const newCode = newPre.querySelector('code')
+            if (newCode) {
+              block.innerHTML = newCode.innerHTML
+              block.className = newCode.className
+            }
+            pre.className = `${pre.className} ${newPre.className}`.trim()
+
+            // Set data-language attribute for CSS targeting (rehype-pretty-code compatible)
+            if (rawLang) {
+              pre.dataset.language = rawLang
+            }
+
+            // Add header with language label and copy button
+            if (!pre.querySelector('[data-code-header]')) {
+              const header = document.createElement('div')
+              header.className = 'flex items-center justify-end px-4 py-2 border-b border-border bg-transparent'
+              header.dataset.codeHeader = 'true'
+
+              if (rawLang) {
+                const langSpan = document.createElement('span')
+                langSpan.className = 'mr-auto font-mono text-xs font-medium uppercase tracking-wide text-muted-foreground'
+                langSpan.textContent = rawLang
+                header.appendChild(langSpan)
+              }
+
+              const copyBtn = createCopyButton(code)
+              header.appendChild(copyBtn)
+
+              pre.insertBefore(header, pre.firstChild)
+            }
+
+            pre.dataset.shikiHighlighted = 'true'
+          }
+        } catch {
+          pre.dataset.shikiHighlighted = 'true'
+        }
+      }
+    }
+
+    highlightBlocks()
+
+    return () => {
+      cancelled = true
+    }
+  }, [containerRef, content])
+}
