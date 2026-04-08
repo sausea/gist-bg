@@ -130,6 +130,20 @@ func (mr *MockFolderRepositoryMockRecorder) Update(ctx, id, name, parentID any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockFolderRepository)(nil).Update), ctx, id, name, parentID)
 }
 
+// UpdateAnalysisArchiveDir mocks base method.
+func (m *MockFolderRepository) UpdateAnalysisArchiveDir(ctx context.Context, id int64, archiveDir string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateAnalysisArchiveDir", ctx, id, archiveDir)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateAnalysisArchiveDir indicates an expected call of UpdateAnalysisArchiveDir.
+func (mr *MockFolderRepositoryMockRecorder) UpdateAnalysisArchiveDir(ctx, id, archiveDir any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAnalysisArchiveDir", reflect.TypeOf((*MockFolderRepository)(nil).UpdateAnalysisArchiveDir), ctx, id, archiveDir)
+}
+
 // UpdateType mocks base method.
 func (m *MockFolderRepository) UpdateType(ctx context.Context, id int64, folderType string) error {
 	m.ctrl.T.Helper()

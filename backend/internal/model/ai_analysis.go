@@ -40,13 +40,16 @@ type StoredAIAnalysis struct {
 }
 
 type AIDailyReport struct {
-	Date        string                    `json:"date"`
-	Total       int                       `json:"total"`
-	Sentiment   AIDailyReportSentiment    `json:"sentiment"`
-	TopAnalyses []StoredAIAnalysis        `json:"topAnalyses"`
-	TopTags     []AIDailyReportCountItem  `json:"topTags"`
-	TopEntities []AIDailyReportCountItem  `json:"topEntities"`
-	TopFeeds    []AIDailyReportFeedMetric `json:"topFeeds"`
+	Date         string                    `json:"date"`
+	Total        int                       `json:"total"`
+	Sentiment    AIDailyReportSentiment    `json:"sentiment"`
+	TopAnalyses  []StoredAIAnalysis        `json:"topAnalyses"`
+	TopTags      []AIDailyReportCountItem  `json:"topTags"`
+	TopEntities  []AIDailyReportCountItem  `json:"topEntities"`
+	TopFeeds     []AIDailyReportFeedMetric `json:"topFeeds"`
+	Overview     string                    `json:"overview,omitempty"`
+	RiskReview   string                    `json:"riskReview,omitempty"`
+	TrendOutlook string                    `json:"trendOutlook,omitempty"`
 }
 
 type AIDailyReportSentiment struct {

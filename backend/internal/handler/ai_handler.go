@@ -142,6 +142,9 @@ type dailyAnalysisReportResponse struct {
 	TopTags      []dailyReportCountItemResponse  `json:"topTags"`
 	TopEntities  []dailyReportCountItemResponse  `json:"topEntities"`
 	TopFeeds     []dailyReportFeedMetricResponse `json:"topFeeds"`
+	Overview     string                          `json:"overview,omitempty"`
+	RiskReview   string                          `json:"riskReview,omitempty"`
+	TrendOutlook string                          `json:"trendOutlook,omitempty"`
 }
 
 func NewAIHandler(service service.AIService) *AIHandler {
@@ -342,6 +345,9 @@ func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int
 		Date:         report.Date,
 		Total:        report.Total,
 		PendingCount: pendingCount,
+		Overview:     report.Overview,
+		RiskReview:   report.RiskReview,
+		TrendOutlook: report.TrendOutlook,
 		Sentiment: dailyReportSentimentResponse{
 			Positive: report.Sentiment.Positive,
 			Neutral:  report.Sentiment.Neutral,

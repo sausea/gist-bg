@@ -95,8 +95,8 @@ func SeedFolder(t *testing.T, db *sql.DB, name string, parentID *int64, folderTy
 
 	_, err := db.ExecContext(
 		context.Background(),
-		`INSERT INTO folders (id, name, parent_id, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, name, parentIDVal, folderType, now, now,
+		`INSERT INTO folders (id, name, parent_id, type, analysis_archive_dir, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, name, parentIDVal, folderType, "", now, now,
 	)
 	if err != nil {
 		t.Fatalf("failed to seed folder: %v", err)

@@ -346,6 +346,16 @@ export async function updateFolder(
   });
 }
 
+export async function updateFolderArchiveDir(
+  id: string,
+  analysisArchiveDir: string,
+): Promise<Folder> {
+  return request<Folder>(`/api/folders/${id}/archive-dir`, {
+    method: "PATCH",
+    body: JSON.stringify({ analysisArchiveDir }),
+  });
+}
+
 export async function deleteFolder(id: string): Promise<void> {
   return request<void>(`/api/folders/${id}`, {
     method: "DELETE",
@@ -807,6 +817,9 @@ export interface AIDailyReport {
   date: string;
   total: number;
   pendingCount: number;
+  overview?: string;
+  riskReview?: string;
+  trendOutlook?: string;
   sentiment: AIDailyReportSentiment;
   topAnalyses: StoredAIAnalysis[];
   topTags: AIDailyReportCountItem[];

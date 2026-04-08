@@ -26,8 +26,10 @@ func TestSettingsHandler_GetAISettings_Success(t *testing.T) {
 	c, rec := newTestContext(e, req)
 
 	settings := &service.AISettings{
-		Provider: "openai",
-		Model:    "gpt-4",
+		Analysis: service.AIModelSettings{
+			Provider: "openai",
+			Model:    "gpt-4",
+		},
 	}
 
 	mockService.EXPECT().
@@ -39,7 +41,7 @@ func TestSettingsHandler_GetAISettings_Success(t *testing.T) {
 
 	var resp handler.AISettingsResponse
 	assertJSONResponse(t, rec, http.StatusOK, &resp)
-	require.Equal(t, "openai", resp.Provider)
+	require.Equal(t, "openai", resp.Analysis.Provider)
 }
 
 func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
@@ -51,8 +53,18 @@ func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
 
 	e := newTestEcho()
 	reqBody := map[string]interface{}{
-		"provider": "openai",
-		"model":    "gpt-4",
+		"analysis": map[string]interface{}{
+			"provider": "openai",
+			"model":    "gpt-4",
+		},
+		"translation": map[string]interface{}{
+			"provider": "openai",
+			"model":    "gpt-4o-mini",
+		},
+		"report": map[string]interface{}{
+			"provider": "anthropic",
+			"model":    "claude-sonnet",
+		},
 	}
 	req := newJSONRequest(http.MethodPut, "/settings/ai", reqBody)
 	c, rec := newTestContext(e, req)
@@ -63,7 +75,7 @@ func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
 
 	mockService.EXPECT().
 		GetAISettings(gomock.Any()).
-		Return(&service.AISettings{Provider: "openai", Model: "gpt-4"}, nil)
+		Return(&service.AISettings{Analysis: service.AIModelSettings{Provider: "openai", Model: "gpt-4"}}, nil)
 
 	err := h.UpdateAISettings(c)
 	require.NoError(t, err)
@@ -126,8 +138,9 @@ func TestSettingsHandler_GetGeneralSettings_Success(t *testing.T) {
 	c, rec := newTestContext(e, req)
 
 	settings := &service.GeneralSettings{
-		AutoReadability:     true,
-		AIDailyReportAPIKey: "***123",
+		AutoReadability:      true,
+		AIDailyReportAPIKey:  "***123",
+		AIAnalysisArchiveDir: "/tmp/gist-ai",
 	}
 
 	mockService.EXPECT().
@@ -141,6 +154,7 @@ func TestSettingsHandler_GetGeneralSettings_Success(t *testing.T) {
 	assertJSONResponse(t, rec, http.StatusOK, &resp)
 	require.True(t, resp.AutoReadability)
 	require.Equal(t, "***123", resp.AIDailyReportAPIKey)
+	require.Equal(t, "/tmp/gist-ai", resp.AIAnalysisArchiveDir)
 }
 
 func TestSettingsHandler_UpdateGeneralSettings_Success(t *testing.T) {
@@ -152,8 +166,9 @@ func TestSettingsHandler_UpdateGeneralSettings_Success(t *testing.T) {
 
 	e := newTestEcho()
 	reqBody := map[string]interface{}{
-		"autoReadability":     true,
-		"aiDailyReportApiKey": "report-secret",
+		"autoReadability":      true,
+		"aiDailyReportApiKey":  "report-secret",
+		"aiAnalysisArchiveDir": "/tmp/gist-ai",
 	}
 	req := newJSONRequest(http.MethodPut, "/settings/general", reqBody)
 	c, rec := newTestContext(e, req)
@@ -164,7 +179,7 @@ func TestSettingsHandler_UpdateGeneralSettings_Success(t *testing.T) {
 
 	mockService.EXPECT().
 		GetGeneralSettings(gomock.Any()).
-		Return(&service.GeneralSettings{AutoReadability: true}, nil)
+		Return(&service.GeneralSettings{AutoReadability: true, AIAnalysisArchiveDir: "/tmp/gist-ai"}, nil)
 
 	err := h.UpdateGeneralSettings(c)
 	require.NoError(t, err)

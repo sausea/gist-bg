@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS folders (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   parent_id INTEGER,
+  analysis_archive_dir TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
@@ -343,6 +344,20 @@ func runMigrations(db *sql.DB) error {
 	// Migration 17: Switch entry dedup key to hash and merge historical duplicates.
 	if err := migrateEntryHashDeduplication(db); err != nil {
 		return fmt.Errorf("migrate entry hash deduplication: %w", err)
+	}
+
+	// Migration 18: Add analysis archive directory to folders for per-folder AI markdown archiving.
+	err = db.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('folders') WHERE name = 'analysis_archive_dir'
+	`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check folders analysis_archive_dir column: %w", err)
+	}
+
+	if count == 0 {
+		if _, err := db.Exec(`ALTER TABLE folders ADD COLUMN analysis_archive_dir TEXT`); err != nil {
+			return fmt.Errorf("add folders analysis_archive_dir column: %w", err)
+		}
 	}
 
 	return nil

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"gist/backend/internal/model"
-	"gist/backend/internal/service"
 	"gist/backend/internal/repository/mock"
+	"gist/backend/internal/service"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -225,6 +225,34 @@ func TestFolderService_UpdateType_CascadeToFeeds(t *testing.T) {
 
 	err := svc.UpdateType(ctx, folderID, "picture")
 	require.NoError(t, err)
+}
+
+func TestFolderService_UpdateAnalysisArchiveDir_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockFolders := mock.NewMockFolderRepository(ctrl)
+	mockFeeds := mock.NewMockFeedRepository(ctrl)
+	svc := service.NewFolderService(mockFolders, mockFeeds)
+	ctx := context.Background()
+
+	folderID := int64(123)
+
+	mockFolders.EXPECT().
+		GetByID(ctx, folderID).
+		Return(model.Folder{ID: folderID, Name: "News"}, nil)
+
+	mockFolders.EXPECT().
+		UpdateAnalysisArchiveDir(ctx, folderID, "/tmp/news").
+		Return(nil)
+
+	mockFolders.EXPECT().
+		GetByID(ctx, folderID).
+		Return(model.Folder{ID: folderID, Name: "News", AnalysisArchiveDir: "/tmp/news"}, nil)
+
+	folder, err := svc.UpdateAnalysisArchiveDir(ctx, folderID, " /tmp/news ")
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/news", folder.AnalysisArchiveDir)
 }
 
 func TestFolderService_Delete_Success(t *testing.T) {

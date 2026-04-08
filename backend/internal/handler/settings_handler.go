@@ -16,37 +16,36 @@ import (
 // Request/Response types
 
 type aiSettingsResponse struct {
-	Provider           string `json:"provider"`
-	APIKey             string `json:"apiKey"`
-	BaseURL            string `json:"baseUrl"`
-	Model              string `json:"model"`
-	Endpoint           string `json:"endpoint" enums:"responses,chat/completions"`
-	Thinking           bool   `json:"thinking"`
-	ThinkingBudget     int    `json:"thinkingBudget"`
-	ReasoningEffort    string `json:"reasoningEffort"`
-	SummaryLanguage    string `json:"summaryLanguage"`
-	AutoTranslate      bool   `json:"autoTranslate"`
-	AutoTranslateTitle bool   `json:"autoTranslateTitle"`
-	AutoSummary        bool   `json:"autoSummary"`
-	AutoAnalysis       bool   `json:"autoAnalysis"`
-	RateLimit          int    `json:"rateLimit"`
+	Analysis           aiModelSettingsPayload `json:"analysis"`
+	Translation        aiModelSettingsPayload `json:"translation"`
+	Report             aiModelSettingsPayload `json:"report"`
+	SummaryLanguage    string                 `json:"summaryLanguage"`
+	AutoTranslate      bool                   `json:"autoTranslate"`
+	AutoTranslateTitle bool                   `json:"autoTranslateTitle"`
+	AutoAnalysis       bool                   `json:"autoAnalysis"`
+	RateLimit          int                    `json:"rateLimit"`
 }
 
 type aiSettingsRequest struct {
-	Provider           string `json:"provider"`
-	APIKey             string `json:"apiKey"`
-	BaseURL            string `json:"baseUrl"`
-	Model              string `json:"model"`
-	Endpoint           string `json:"endpoint" enums:"responses,chat/completions"`
-	Thinking           bool   `json:"thinking"`
-	ThinkingBudget     int    `json:"thinkingBudget"`
-	ReasoningEffort    string `json:"reasoningEffort"`
-	SummaryLanguage    string `json:"summaryLanguage"`
-	AutoTranslate      bool   `json:"autoTranslate"`
-	AutoTranslateTitle bool   `json:"autoTranslateTitle"`
-	AutoSummary        bool   `json:"autoSummary"`
-	AutoAnalysis       bool   `json:"autoAnalysis"`
-	RateLimit          int    `json:"rateLimit"`
+	Analysis           aiModelSettingsPayload `json:"analysis"`
+	Translation        aiModelSettingsPayload `json:"translation"`
+	Report             aiModelSettingsPayload `json:"report"`
+	SummaryLanguage    string                 `json:"summaryLanguage"`
+	AutoTranslate      bool                   `json:"autoTranslate"`
+	AutoTranslateTitle bool                   `json:"autoTranslateTitle"`
+	AutoAnalysis       bool                   `json:"autoAnalysis"`
+	RateLimit          int                    `json:"rateLimit"`
+}
+
+type aiModelSettingsPayload struct {
+	Provider        string `json:"provider"`
+	APIKey          string `json:"apiKey"`
+	BaseURL         string `json:"baseUrl"`
+	Model           string `json:"model"`
+	Endpoint        string `json:"endpoint" enums:"responses,chat/completions"`
+	Thinking        bool   `json:"thinking"`
+	ThinkingBudget  int    `json:"thinkingBudget"`
+	ReasoningEffort string `json:"reasoningEffort"`
 }
 
 type aiTestRequest struct {
@@ -67,15 +66,17 @@ type aiTestResponse struct {
 }
 
 type generalSettingsResponse struct {
-	FallbackUserAgent   string `json:"fallbackUserAgent"`
-	AutoReadability     bool   `json:"autoReadability"`
-	AIDailyReportAPIKey string `json:"aiDailyReportApiKey"`
+	FallbackUserAgent    string `json:"fallbackUserAgent"`
+	AutoReadability      bool   `json:"autoReadability"`
+	AIDailyReportAPIKey  string `json:"aiDailyReportApiKey"`
+	AIAnalysisArchiveDir string `json:"aiAnalysisArchiveDir"`
 }
 
 type generalSettingsRequest struct {
-	FallbackUserAgent   string `json:"fallbackUserAgent"`
-	AutoReadability     bool   `json:"autoReadability"`
-	AIDailyReportAPIKey string `json:"aiDailyReportApiKey"`
+	FallbackUserAgent    string `json:"fallbackUserAgent"`
+	AutoReadability      bool   `json:"autoReadability"`
+	AIDailyReportAPIKey  string `json:"aiDailyReportApiKey"`
+	AIAnalysisArchiveDir string `json:"aiAnalysisArchiveDir"`
 }
 
 type networkSettingsResponse struct {
@@ -179,18 +180,12 @@ func (h *SettingsHandler) GetAISettings(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, aiSettingsResponse{
-		Provider:           settings.Provider,
-		APIKey:             settings.APIKey,
-		BaseURL:            settings.BaseURL,
-		Model:              settings.Model,
-		Endpoint:           settings.Endpoint,
-		Thinking:           settings.Thinking,
-		ThinkingBudget:     settings.ThinkingBudget,
-		ReasoningEffort:    settings.ReasoningEffort,
+		Analysis:           toAIModelSettingsPayload(settings.Analysis),
+		Translation:        toAIModelSettingsPayload(settings.Translation),
+		Report:             toAIModelSettingsPayload(settings.Report),
 		SummaryLanguage:    settings.SummaryLanguage,
 		AutoTranslate:      settings.AutoTranslate,
 		AutoTranslateTitle: settings.AutoTranslateTitle,
-		AutoSummary:        settings.AutoSummary,
 		AutoAnalysis:       settings.AutoAnalysis,
 		RateLimit:          settings.RateLimit,
 	})
@@ -213,36 +208,69 @@ func (h *SettingsHandler) UpdateAISettings(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid request"})
 	}
 
-	endpoint, err := normalizeOpenAIEndpoint(req.Provider, req.Endpoint)
+	analysis, err := normalizeAIModelSettings(req.Analysis)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
+	}
+	translation, err := normalizeAIModelSettings(req.Translation)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
+	}
+	report, err := normalizeAIModelSettings(req.Report)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
 	}
 
 	settings := &service.AISettings{
-		Provider:           req.Provider,
-		APIKey:             req.APIKey,
-		BaseURL:            req.BaseURL,
-		Model:              req.Model,
-		Endpoint:           endpoint,
-		Thinking:           req.Thinking,
-		ThinkingBudget:     req.ThinkingBudget,
-		ReasoningEffort:    req.ReasoningEffort,
+		Analysis:           analysis,
+		Translation:        translation,
+		Report:             report,
 		SummaryLanguage:    req.SummaryLanguage,
 		AutoTranslate:      req.AutoTranslate,
 		AutoTranslateTitle: req.AutoTranslateTitle,
-		AutoSummary:        req.AutoSummary,
 		AutoAnalysis:       req.AutoAnalysis,
 		RateLimit:          req.RateLimit,
 	}
 
 	if err := h.service.SetAISettings(c.Request().Context(), settings); err != nil {
-		logger.Error("ai settings update failed", "module", "handler", "action", "update", "resource", "settings", "result", "failed", "provider", req.Provider, "error", err)
+		logger.Error("ai settings update failed", "module", "handler", "action", "update", "resource", "settings", "result", "failed", "provider", req.Analysis.Provider, "error", err)
 		return c.JSON(http.StatusInternalServerError, errorResponse{Error: "failed to save settings"})
 	}
 
-	logger.Info("ai settings updated", "module", "handler", "action", "update", "resource", "settings", "result", "ok", "provider", req.Provider)
+	logger.Info("ai settings updated", "module", "handler", "action", "update", "resource", "settings", "result", "ok", "provider", req.Analysis.Provider)
 	// Return updated settings (with masked keys)
 	return h.GetAISettings(c)
+}
+
+func normalizeAIModelSettings(req aiModelSettingsPayload) (service.AIModelSettings, error) {
+	endpoint, err := normalizeOpenAIEndpoint(req.Provider, req.Endpoint)
+	if err != nil {
+		return service.AIModelSettings{}, err
+	}
+
+	return service.AIModelSettings{
+		Provider:        req.Provider,
+		APIKey:          req.APIKey,
+		BaseURL:         req.BaseURL,
+		Model:           req.Model,
+		Endpoint:        endpoint,
+		Thinking:        req.Thinking,
+		ThinkingBudget:  req.ThinkingBudget,
+		ReasoningEffort: req.ReasoningEffort,
+	}, nil
+}
+
+func toAIModelSettingsPayload(settings service.AIModelSettings) aiModelSettingsPayload {
+	return aiModelSettingsPayload{
+		Provider:        settings.Provider,
+		APIKey:          settings.APIKey,
+		BaseURL:         settings.BaseURL,
+		Model:           settings.Model,
+		Endpoint:        settings.Endpoint,
+		Thinking:        settings.Thinking,
+		ThinkingBudget:  settings.ThinkingBudget,
+		ReasoningEffort: settings.ReasoningEffort,
+	}
 }
 
 // TestAI tests the AI connection.
@@ -304,9 +332,10 @@ func (h *SettingsHandler) GetGeneralSettings(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, generalSettingsResponse{
-		FallbackUserAgent:   settings.FallbackUserAgent,
-		AutoReadability:     settings.AutoReadability,
-		AIDailyReportAPIKey: settings.AIDailyReportAPIKey,
+		FallbackUserAgent:    settings.FallbackUserAgent,
+		AutoReadability:      settings.AutoReadability,
+		AIDailyReportAPIKey:  settings.AIDailyReportAPIKey,
+		AIAnalysisArchiveDir: settings.AIAnalysisArchiveDir,
 	})
 }
 
@@ -328,9 +357,10 @@ func (h *SettingsHandler) UpdateGeneralSettings(c echo.Context) error {
 	}
 
 	settings := &service.GeneralSettings{
-		FallbackUserAgent:   req.FallbackUserAgent,
-		AutoReadability:     req.AutoReadability,
-		AIDailyReportAPIKey: req.AIDailyReportAPIKey,
+		FallbackUserAgent:    req.FallbackUserAgent,
+		AutoReadability:      req.AutoReadability,
+		AIDailyReportAPIKey:  req.AIDailyReportAPIKey,
+		AIAnalysisArchiveDir: req.AIAnalysisArchiveDir,
 	}
 
 	if err := h.service.SetGeneralSettings(c.Request().Context(), settings); err != nil {

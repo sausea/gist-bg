@@ -14,6 +14,7 @@ export function GeneralSettings() {
   const [fallbackUA, setFallbackUA] = useState("");
   const [autoReadability, setAutoReadability] = useState(false);
   const [aiDailyReportApiKey, setAIDailyReportApiKey] = useState("");
+  const [aiAnalysisArchiveDir, setAIAnalysisArchiveDir] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">(
     "idle",
@@ -25,6 +26,7 @@ export function GeneralSettings() {
         setFallbackUA(settings.fallbackUserAgent || "");
         setAutoReadability(settings.autoReadability || false);
         setAIDailyReportApiKey(settings.aiDailyReportApiKey || "");
+        setAIAnalysisArchiveDir(settings.aiAnalysisArchiveDir || "");
       })
       .catch(() => {
         // ignore
@@ -39,6 +41,7 @@ export function GeneralSettings() {
         fallbackUserAgent: fallbackUA,
         autoReadability,
         aiDailyReportApiKey,
+        aiAnalysisArchiveDir,
       });
       setSaveStatus("success");
       setTimeout(() => setSaveStatus("idle"), 2000);
@@ -57,6 +60,7 @@ export function GeneralSettings() {
           fallbackUserAgent: fallbackUA,
           autoReadability: checked,
           aiDailyReportApiKey,
+          aiAnalysisArchiveDir,
         });
         queryClient.invalidateQueries({ queryKey: ["generalSettings"] });
       } catch {
@@ -64,7 +68,7 @@ export function GeneralSettings() {
         setAutoReadability(!checked);
       }
     },
-    [aiDailyReportApiKey, fallbackUA, queryClient],
+    [aiAnalysisArchiveDir, aiDailyReportApiKey, fallbackUA, queryClient],
   );
 
   const languageOptions = useMemo(
@@ -184,6 +188,50 @@ export function GeneralSettings() {
               placeholder={t("settings.ai_daily_report_api_key_placeholder")}
               className={cn(
                 "h-9 w-64 max-w-full rounded-md border border-border bg-background px-3 text-sm",
+                "placeholder:text-muted-foreground/50",
+                "focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary",
+              )}
+            />
+            <button
+              type="button"
+              onClick={handleSaveGeneralSettings}
+              disabled={isSaving}
+              className={cn(
+                "h-9 rounded-md px-3 text-sm font-medium transition-colors shrink-0",
+                "bg-primary text-primary-foreground hover:bg-primary/90",
+                "disabled:cursor-not-allowed disabled:opacity-50",
+                saveStatus === "success" && "bg-green-600 hover:bg-green-600",
+                saveStatus === "error" && "bg-destructive hover:bg-destructive",
+              )}
+            >
+              {isSaving
+                ? t("settings.saving")
+                : saveStatus === "success"
+                  ? t("settings.saved")
+                  : t("settings.save")}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">
+              {t("settings.ai_analysis_archive_dir")}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t("settings.ai_analysis_archive_dir_description")}
+            </div>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <input
+              type="text"
+              value={aiAnalysisArchiveDir}
+              onChange={(e) => setAIAnalysisArchiveDir(e.target.value)}
+              placeholder={t("settings.ai_analysis_archive_dir_placeholder")}
+              className={cn(
+                "h-9 w-80 max-w-full rounded-md border border-border bg-background px-3 text-sm",
                 "placeholder:text-muted-foreground/50",
                 "focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary",
               )}

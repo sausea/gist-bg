@@ -11,7 +11,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestAIStreamProcessor_ProcessSummaryAndAnalysis(t *testing.T) {
+func TestAIStreamProcessor_ProcessAnalysis(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -26,18 +26,7 @@ func TestAIStreamProcessor_ProcessSummaryAndAnalysis(t *testing.T) {
 	}
 
 	entryRepo.EXPECT().GetByID(gomock.Any(), int64(42)).Return(entry, nil)
-	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoSummary).Return(&model.Setting{Key: service.KeyAIAutoSummary, Value: "true"}, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoAnalysis).Return(&model.Setting{Key: service.KeyAIAutoAnalysis, Value: "true"}, nil)
-	aiService.EXPECT().GetCachedSummary(gomock.Any(), int64(42), false).Return(nil, nil)
-
-	textCh := make(chan string, 1)
-	textCh <- "streamed summary"
-	close(textCh)
-	errCh := make(chan error)
-	close(errCh)
-
-	aiService.EXPECT().Summarize(gomock.Any(), int64(42), "<p>Test content</p>", "Test title", false).Return(textCh, errCh, nil)
-	aiService.EXPECT().SaveSummary(gomock.Any(), int64(42), false, "streamed summary").Return(nil)
 	aiService.EXPECT().GetCachedAnalysis(gomock.Any(), int64(42), false).Return(nil, nil)
 	aiService.EXPECT().Analyze(gomock.Any(), int64(42), "<p>Test content</p>", "Test title", false).Return(&model.AIAnalysis{}, nil)
 
@@ -97,7 +86,7 @@ func TestAIStreamProcessor_EnsureQueued_SkipsWhenCached(t *testing.T) {
 	entryRepo.EXPECT().GetByID(gomock.Any(), int64(9)).Return(entry, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoSummary).Return(&model.Setting{Key: service.KeyAIAutoSummary, Value: "true"}, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoAnalysis).Return(&model.Setting{Key: service.KeyAIAutoAnalysis, Value: "false"}, nil)
-	aiService.EXPECT().GetCachedSummary(gomock.Any(), int64(9), false).Return(&model.AISummary{Summary: "ready"}, nil)
+	aiService.EXPECT().GetCachedAnalysis(gomock.Any(), int64(9), false).Return(&model.AIAnalysis{Summary: "ready"}, nil)
 
 	processor := service.NewAIStreamProcessor(entryRepo, settingsRepo, aiService, 1, 4)
 	status := processor.EnsureQueued(9)
@@ -125,16 +114,13 @@ func TestAIStreamProcessor_EnsureQueued_QueuesWhenMissingCache(t *testing.T) {
 	entryRepo.EXPECT().GetByID(gomock.Any(), int64(42)).Return(entry, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoSummary).Return(&model.Setting{Key: service.KeyAIAutoSummary, Value: "true"}, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoAnalysis).Return(&model.Setting{Key: service.KeyAIAutoAnalysis, Value: "false"}, nil)
-	aiService.EXPECT().GetCachedSummary(gomock.Any(), int64(42), false).Return(nil, nil)
+	aiService.EXPECT().GetCachedAnalysis(gomock.Any(), int64(42), false).Return(nil, nil)
 
 	entryRepo.EXPECT().GetByID(gomock.Any(), int64(42)).Return(entry, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoSummary).Return(&model.Setting{Key: service.KeyAIAutoSummary, Value: "true"}, nil)
 	settingsRepo.EXPECT().Get(gomock.Any(), service.KeyAIAutoAnalysis).Return(&model.Setting{Key: service.KeyAIAutoAnalysis, Value: "false"}, nil)
-	aiService.EXPECT().GetCachedSummary(gomock.Any(), int64(42), false).Return(nil, nil)
-
-	textCh := make(chan string)
-	errCh := make(chan error)
-	aiService.EXPECT().Summarize(gomock.Any(), int64(42), "<p>Queued content</p>", "Queued title", false).Return(textCh, errCh, nil)
+	aiService.EXPECT().GetCachedAnalysis(gomock.Any(), int64(42), false).Return(nil, nil)
+	aiService.EXPECT().Analyze(gomock.Any(), int64(42), "<p>Queued content</p>", "Queued title", false).Return(&model.AIAnalysis{}, nil)
 
 	processor := service.NewAIStreamProcessor(entryRepo, settingsRepo, aiService, 1, 4)
 	status := processor.EnsureQueued(42)
@@ -142,7 +128,5 @@ func TestAIStreamProcessor_EnsureQueued_QueuesWhenMissingCache(t *testing.T) {
 		t.Fatalf("expected missing cache entry to be queued")
 	}
 
-	close(textCh)
-	close(errCh)
 	processor.Close()
 }

@@ -12,7 +12,6 @@ import { useGeneralSettings } from "@/hooks/useGeneralSettings";
 import { useEntryContentScroll } from "@/hooks/useEntryContentScroll";
 import { useScrollToTop } from "@/hooks/useScrollToTop";
 import { useReadability } from "@/hooks/useReadability";
-import { useAISummary } from "@/hooks/useAISummary";
 import { useAIAnalysis } from "@/hooks/useAIAnalysis";
 import { useAITranslation } from "@/hooks/useAITranslation";
 import { useAIProcessingStatus } from "@/hooks/useAIProcessingStatus";
@@ -51,7 +50,6 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
   const autoTranslateTitle = aiSettings?.autoTranslateTitle ?? false;
   const targetLanguage = aiSettings?.summaryLanguage ?? "zh-CN";
   const autoReadability = generalSettings?.autoReadability ?? false;
-  const autoSummary = aiSettings?.autoSummary ?? false;
   const autoAnalysis = aiSettings?.autoAnalysis ?? false;
 
   const [exportOpen, setExportOpen] = useState(false);
@@ -74,16 +72,9 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
     handleToggleReadable,
   } = useReadability({ entry, autoReadability });
 
-  // AI Summary hook
-  const { aiSummary, isLoadingSummary, summaryError, handleToggleSummary } =
-    useAISummary({
-      entry,
-      isReadableActive,
-      readableContent,
-      autoSummary,
-    });
+  const [showAnalysis, setShowAnalysis] = useState(autoAnalysis);
 
-  const { aiAnalysis, isLoadingAnalysis, analysisError, handleToggleAnalysis } =
+  const { aiAnalysis, isLoadingAnalysis, analysisError, requestAnalysis, cancelAnalysis } =
     useAIAnalysis({
       entry,
       isReadableActive,
@@ -91,21 +82,18 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
       autoAnalysis,
     });
 
+  useEffect(() => {
+    setShowAnalysis(autoAnalysis);
+  }, [entry?.id, autoAnalysis]);
+
   const { data: aiProcessingStatus } = useAIProcessingStatus({
     entryId,
     enabled: true,
   });
 
   const isBackgroundAIProcessing = !!aiProcessingStatus?.processing;
-  const isBackgroundSummaryProcessing =
-    autoSummary &&
-    isBackgroundAIProcessing &&
-    !aiSummary &&
-    !isLoadingSummary &&
-    !summaryError;
-
   const isBackgroundAnalysisProcessing =
-    autoAnalysis &&
+    showAnalysis &&
     isBackgroundAIProcessing &&
     !aiAnalysis &&
     !isLoadingAnalysis &&
@@ -202,6 +190,31 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
     setExportOpen(false);
   }, [entry, markAsStarred]);
 
+  const handleToggleAnalysis = useCallback(async () => {
+    if (!entry) return;
+
+    if (showAnalysis) {
+      if (isLoadingAnalysis && !aiAnalysis) {
+        cancelAnalysis();
+      }
+      setShowAnalysis(false);
+      return;
+    }
+
+    setShowAnalysis(true);
+    if (!aiAnalysis && !isLoadingAnalysis) {
+      await requestAnalysis(isReadableActive);
+    }
+  }, [
+    entry,
+    showAnalysis,
+    isLoadingAnalysis,
+    aiAnalysis,
+    cancelAnalysis,
+    requestAnalysis,
+    isReadableActive,
+  ]);
+
   // Determine display content:
   // - Always keep original content as the baseline.
   // - When translation is enabled, render bilingual blocks (original + translation under each block).
@@ -233,11 +246,8 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
         error={readableError}
         onToggleReadable={handleToggleReadable}
         onOpenStarDialog={handleOpenExport}
-        isLoadingSummary={isLoadingSummary}
-        hasSummary={!!aiSummary}
-        onToggleSummary={handleToggleSummary}
-        isLoadingAnalysis={isLoadingAnalysis}
-        hasAnalysis={!!aiAnalysis}
+        isLoadingAnalysis={showAnalysis && isLoadingAnalysis}
+        hasAnalysis={showAnalysis}
         onToggleAnalysis={handleToggleAnalysis}
         isTranslating={isTranslating}
         hasTranslation={hasTranslation}
@@ -321,15 +331,11 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
         displayContent={displayContent}
         displayBlocks={translatedContentBlocks}
         highlightContent={highlightContent}
-        aiSummary={aiSummary}
-        aiAnalysis={aiAnalysis}
-        isLoadingAnalysis={isLoadingAnalysis}
-        analysisError={analysisError}
-        isLoadingSummary={isLoadingSummary}
-        summaryError={summaryError}
+        aiAnalysis={showAnalysis ? aiAnalysis : null}
+        isLoadingAnalysis={showAnalysis ? isLoadingAnalysis : false}
+        analysisError={showAnalysis ? analysisError : null}
         isBackgroundAIProcessing={isBackgroundAIProcessing}
         aiProcessingQueued={!!aiProcessingStatus?.queued}
-        isBackgroundSummaryProcessing={isBackgroundSummaryProcessing}
         isBackgroundAnalysisProcessing={isBackgroundAnalysisProcessing}
       />
     </div>

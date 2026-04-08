@@ -238,16 +238,9 @@ func (p *aiStreamProcessor) processEntry(entryID int64) {
 		title = strings.TrimSpace(*entry.Title)
 	}
 
-	autoSummary := p.getBoolSetting(ctx, keyAIAutoSummary)
-	autoAnalysis := p.getBoolSetting(ctx, keyAIAutoAnalysis)
-	if !autoSummary && !autoAnalysis {
+	autoAnalysis := p.getBoolSetting(ctx, keyAIAutoAnalysis) || p.getBoolSetting(ctx, keyAIAutoSummary)
+	if !autoAnalysis {
 		return
-	}
-
-	if autoSummary {
-		if err := p.ensureSummary(ctx, entryID, content, title, isReadability); err != nil {
-			logger.Warn("ai stream summary failed", "module", "service", "action", "process", "resource", "ai_stream", "result", "failed", "entry_id", entryID, "error", err)
-		}
 	}
 
 	if autoAnalysis {
@@ -268,20 +261,9 @@ func (p *aiStreamProcessor) shouldEnqueue(ctx context.Context, entryID int64) (b
 		return false, nil
 	}
 
-	autoSummary := p.getBoolSetting(ctx, keyAIAutoSummary)
-	autoAnalysis := p.getBoolSetting(ctx, keyAIAutoAnalysis)
-	if !autoSummary && !autoAnalysis {
+	autoAnalysis := p.getBoolSetting(ctx, keyAIAutoAnalysis) || p.getBoolSetting(ctx, keyAIAutoSummary)
+	if !autoAnalysis {
 		return false, nil
-	}
-
-	if autoSummary {
-		cached, err := p.aiService.GetCachedSummary(ctx, entryID, isReadability)
-		if err != nil {
-			return false, err
-		}
-		if cached == nil {
-			return true, nil
-		}
 	}
 
 	if autoAnalysis {
@@ -295,33 +277,6 @@ func (p *aiStreamProcessor) shouldEnqueue(ctx context.Context, entryID int64) (b
 	}
 
 	return false, nil
-}
-
-func (p *aiStreamProcessor) ensureSummary(ctx context.Context, entryID int64, content, title string, isReadability bool) error {
-	cached, err := p.aiService.GetCachedSummary(ctx, entryID, isReadability)
-	if err != nil {
-		return err
-	}
-	if cached != nil {
-		return nil
-	}
-
-	textCh, errCh, err := p.aiService.Summarize(ctx, entryID, content, title, isReadability)
-	if err != nil {
-		return err
-	}
-
-	var builder strings.Builder
-	for text := range textCh {
-		builder.WriteString(text)
-	}
-	if err := firstChannelError(errCh); err != nil {
-		return err
-	}
-	if builder.Len() == 0 {
-		return nil
-	}
-	return p.aiService.SaveSummary(ctx, entryID, isReadability, builder.String())
 }
 
 func (p *aiStreamProcessor) ensureAnalysis(ctx context.Context, entryID int64, content, title string, isReadability bool) error {

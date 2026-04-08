@@ -19,31 +19,32 @@ var MaskAPIKey = maskAPIKey
 var IsMaskedKey = isMaskedKey
 
 const (
-	KeyAISummaryLanguage   = keyAISummaryLanguage
-	KeyUserUsername        = keyUserUsername
-	KeyUserNickname        = keyUserNickname
-	KeyUserEmail           = keyUserEmail
-	KeyUserPasswordHash    = keyUserPasswordHash
-	KeyUserJWTSecret       = keyUserJWTSecret
-	KeyAIProvider          = keyAIProvider
-	KeyAIAPIKey            = keyAIAPIKey
-	KeyAIBaseURL           = keyAIBaseURL
-	KeyAIModel             = keyAIModel
-	KeyAIThinking          = keyAIThinking
-	KeyAIThinkingBudget    = keyAIThinkingBudget
-	KeyAIReasoningEffort   = keyAIReasoningEffort
-	KeyAIAutoTranslate     = keyAIAutoTranslate
-	KeyAIAutoSummary       = keyAIAutoSummary
-	KeyAIAutoAnalysis      = keyAIAutoAnalysis
-	KeyAIRateLimit         = keyAIRateLimit
-	KeyAIDailyReportAPIKey = keyAIDailyReportAPIKey
-	KeyNetworkEnabled      = keyNetworkEnabled
-	KeyNetworkType         = keyNetworkType
-	KeyNetworkHost         = keyNetworkHost
-	KeyNetworkPort         = keyNetworkPort
-	KeyNetworkUsername     = keyNetworkUsername
-	KeyNetworkPassword     = keyNetworkPassword
-	KeyNetworkIPStack      = keyNetworkIPStack
+	KeyAISummaryLanguage    = keyAISummaryLanguage
+	KeyUserUsername         = keyUserUsername
+	KeyUserNickname         = keyUserNickname
+	KeyUserEmail            = keyUserEmail
+	KeyUserPasswordHash     = keyUserPasswordHash
+	KeyUserJWTSecret        = keyUserJWTSecret
+	KeyAIProvider           = keyAIProvider
+	KeyAIAPIKey             = keyAIAPIKey
+	KeyAIBaseURL            = keyAIBaseURL
+	KeyAIModel              = keyAIModel
+	KeyAIThinking           = keyAIThinking
+	KeyAIThinkingBudget     = keyAIThinkingBudget
+	KeyAIReasoningEffort    = keyAIReasoningEffort
+	KeyAIAutoTranslate      = keyAIAutoTranslate
+	KeyAIAutoSummary        = keyAIAutoSummary
+	KeyAIAutoAnalysis       = keyAIAutoAnalysis
+	KeyAIRateLimit          = keyAIRateLimit
+	KeyAIDailyReportAPIKey  = keyAIDailyReportAPIKey
+	KeyAIAnalysisArchiveDir = keyAIAnalysisArchiveDir
+	KeyNetworkEnabled       = keyNetworkEnabled
+	KeyNetworkType          = keyNetworkType
+	KeyNetworkHost          = keyNetworkHost
+	KeyNetworkPort          = keyNetworkPort
+	KeyNetworkUsername      = keyNetworkUsername
+	KeyNetworkPassword      = keyNetworkPassword
+	KeyNetworkIPStack       = keyNetworkIPStack
 )
 
 var (

@@ -12,29 +12,36 @@ import (
 	"gist/backend/pkg/logger"
 )
 
+// AIModelSettings holds a single AI model configuration.
+type AIModelSettings struct {
+	Provider        string `json:"provider"`
+	APIKey          string `json:"apiKey"`
+	BaseURL         string `json:"baseUrl"`
+	Model           string `json:"model"`
+	Endpoint        string `json:"endpoint"`
+	Thinking        bool   `json:"thinking"`
+	ThinkingBudget  int    `json:"thinkingBudget"`
+	ReasoningEffort string `json:"reasoningEffort"`
+}
+
 // AISettings holds the AI configuration.
 type AISettings struct {
-	Provider           string `json:"provider"`
-	APIKey             string `json:"apiKey"`
-	BaseURL            string `json:"baseUrl"`
-	Model              string `json:"model"`
-	Endpoint           string `json:"endpoint"`
-	Thinking           bool   `json:"thinking"`
-	ThinkingBudget     int    `json:"thinkingBudget"`
-	ReasoningEffort    string `json:"reasoningEffort"`
-	SummaryLanguage    string `json:"summaryLanguage"`
-	AutoTranslate      bool   `json:"autoTranslate"`
-	AutoTranslateTitle bool   `json:"autoTranslateTitle"`
-	AutoSummary        bool   `json:"autoSummary"`
-	AutoAnalysis       bool   `json:"autoAnalysis"`
-	RateLimit          int    `json:"rateLimit"`
+	Analysis           AIModelSettings `json:"analysis"`
+	Translation        AIModelSettings `json:"translation"`
+	Report             AIModelSettings `json:"report"`
+	SummaryLanguage    string          `json:"summaryLanguage"`
+	AutoTranslate      bool            `json:"autoTranslate"`
+	AutoTranslateTitle bool            `json:"autoTranslateTitle"`
+	AutoAnalysis       bool            `json:"autoAnalysis"`
+	RateLimit          int             `json:"rateLimit"`
 }
 
 // GeneralSettings holds general application settings.
 type GeneralSettings struct {
-	FallbackUserAgent   string `json:"fallbackUserAgent"`
-	AutoReadability     bool   `json:"autoReadability"`
-	AIDailyReportAPIKey string `json:"aiDailyReportApiKey"`
+	FallbackUserAgent    string `json:"fallbackUserAgent"`
+	AutoReadability      bool   `json:"autoReadability"`
+	AIDailyReportAPIKey  string `json:"aiDailyReportApiKey"`
+	AIAnalysisArchiveDir string `json:"aiAnalysisArchiveDir"`
 }
 
 // NetworkSettings holds network proxy configuration.
@@ -69,10 +76,13 @@ const (
 	keyAIAutoSummary        = "ai.auto_summary"
 	keyAIAutoAnalysis       = "ai.auto_analysis"
 	keyAIRateLimit          = "ai.rate_limit"
+	keyAITranslatePrefix    = "ai.translate."
+	keyAIReportPrefix       = "ai.report."
 
-	keyFallbackUserAgent   = "general.fallback_user_agent"
-	keyAutoReadability     = "general.auto_readability"
-	keyAIDailyReportAPIKey = "integration.ai_daily_report_api_key"
+	keyFallbackUserAgent    = "general.fallback_user_agent"
+	keyAutoReadability      = "general.auto_readability"
+	keyAIDailyReportAPIKey  = "integration.ai_daily_report_api_key"
+	keyAIAnalysisArchiveDir = "general.ai_analysis_archive_dir"
 
 	keyNetworkEnabled  = "network.proxy_enabled"
 	keyNetworkType     = "network.proxy_type"
@@ -129,93 +139,129 @@ func NewSettingsService(repo repository.SettingsRepository, rateLimiter *ai.Rate
 	return &settingsService{repo: repo, rateLimiter: rateLimiter}
 }
 
+func defaultAIModelSettings() AIModelSettings {
+	return AIModelSettings{
+		Provider:        ai.ProviderOpenAI,
+		Endpoint:        "responses",
+		ThinkingBudget:  10000,
+		ReasoningEffort: "medium",
+	}
+}
+
+func aiModelSettingKey(prefix, suffix string) string {
+	if prefix == "" {
+		return "ai." + suffix
+	}
+	return prefix + suffix
+}
+
+func (s *settingsService) getAIModelSettingsMap(ctx context.Context, prefix string, fallback AIModelSettings) AIModelSettings {
+	settings := fallback
+
+	keys := map[string]*string{
+		aiModelSettingKey(prefix, "provider"):         &settings.Provider,
+		aiModelSettingKey(prefix, "api_key"):          &settings.APIKey,
+		aiModelSettingKey(prefix, "base_url"):         &settings.BaseURL,
+		aiModelSettingKey(prefix, "model"):            &settings.Model,
+		aiModelSettingKey(prefix, "openai_endpoint"):  &settings.Endpoint,
+		aiModelSettingKey(prefix, "reasoning_effort"): &settings.ReasoningEffort,
+	}
+
+	for key, target := range keys {
+		if val, err := s.getString(ctx, key); err == nil && val != "" {
+			*target = val
+		}
+	}
+
+	settings.Thinking = s.getBool(ctx, aiModelSettingKey(prefix, "thinking"))
+	if val, err := s.getInt(ctx, aiModelSettingKey(prefix, "thinking_budget")); err == nil && val > 0 {
+		settings.ThinkingBudget = val
+	}
+
+	return settings
+}
+
+func (s *settingsService) saveAIModelSettings(ctx context.Context, prefix string, settings AIModelSettings) error {
+	if settings.Provider != "" {
+		if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "provider"), settings.Provider); err != nil {
+			return fmt.Errorf("set provider: %w", err)
+		}
+	}
+	if err := s.setAPIKey(ctx, aiModelSettingKey(prefix, "api_key"), settings.APIKey); err != nil {
+		return fmt.Errorf("set api key: %w", err)
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "base_url"), settings.BaseURL); err != nil {
+		return fmt.Errorf("set base url: %w", err)
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "model"), settings.Model); err != nil {
+		return fmt.Errorf("set model: %w", err)
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "openai_endpoint"), settings.Endpoint); err != nil {
+		return fmt.Errorf("set endpoint: %w", err)
+	}
+
+	thinkingVal := "false"
+	if settings.Thinking {
+		thinkingVal = "true"
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "thinking"), thinkingVal); err != nil {
+		return fmt.Errorf("set thinking: %w", err)
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "thinking_budget"), fmt.Sprintf("%d", settings.ThinkingBudget)); err != nil {
+		return fmt.Errorf("set thinking budget: %w", err)
+	}
+	if err := s.repo.Set(ctx, aiModelSettingKey(prefix, "reasoning_effort"), settings.ReasoningEffort); err != nil {
+		return fmt.Errorf("set reasoning effort: %w", err)
+	}
+
+	return nil
+}
+
 // GetAISettings returns the AI configuration with masked API keys.
 func (s *settingsService) GetAISettings(ctx context.Context) (*AISettings, error) {
 	settings := &AISettings{
-		Provider:        ai.ProviderOpenAI, // default
-		Endpoint:        "responses",       // default endpoint
-		ThinkingBudget:  10000,             // default budget
-		ReasoningEffort: "medium",          // default effort
-		SummaryLanguage: "zh-CN",           // default language
+		Analysis:        defaultAIModelSettings(),
+		Translation:     defaultAIModelSettings(),
+		Report:          defaultAIModelSettings(),
+		SummaryLanguage: "zh-CN",
 	}
 
-	if val, err := s.getString(ctx, keyAIProvider); err == nil && val != "" {
-		settings.Provider = val
-	}
-	if val, err := s.getString(ctx, keyAIAPIKey); err == nil && val != "" {
-		settings.APIKey = maskAPIKey(val)
-	}
-	if val, err := s.getString(ctx, keyAIBaseURL); err == nil {
-		settings.BaseURL = val
-	}
-	if val, err := s.getString(ctx, keyAIModel); err == nil {
-		settings.Model = val
-	}
-	if val, err := s.getString(ctx, keyAIEndpoint); err == nil && val != "" {
-		settings.Endpoint = val
-	}
-	settings.Thinking = s.getBool(ctx, keyAIThinking)
-	if val, err := s.getInt(ctx, keyAIThinkingBudget); err == nil && val > 0 {
-		settings.ThinkingBudget = val
-	}
-	// Allow empty string to override default (for Compatible Budget mode)
-	if setting, err := s.repo.Get(ctx, keyAIReasoningEffort); err == nil && setting != nil {
-		settings.ReasoningEffort = setting.Value
-	}
+	settings.Analysis = s.getAIModelSettingsMap(ctx, "", settings.Analysis)
+	settings.Translation = s.getAIModelSettingsMap(ctx, keyAITranslatePrefix, settings.Analysis)
+	settings.Report = s.getAIModelSettingsMap(ctx, keyAIReportPrefix, settings.Analysis)
+
 	if val, err := s.getString(ctx, keyAISummaryLanguage); err == nil && val != "" {
 		settings.SummaryLanguage = val
 	}
 	settings.AutoTranslate = s.getBool(ctx, keyAIAutoTranslate)
 	settings.AutoTranslateTitle = s.getBool(ctx, keyAIAutoTranslateTitle)
-	settings.AutoSummary = s.getBool(ctx, keyAIAutoSummary)
-	settings.AutoAnalysis = s.getBool(ctx, keyAIAutoAnalysis)
+	settings.AutoAnalysis = s.getBool(ctx, keyAIAutoAnalysis) || s.getBool(ctx, keyAIAutoSummary)
 	if val, err := s.getInt(ctx, keyAIRateLimit); err == nil && val > 0 {
 		settings.RateLimit = val
 	} else {
 		settings.RateLimit = ai.DefaultRateLimit
 	}
 
+	settings.Analysis.APIKey = maskAPIKey(settings.Analysis.APIKey)
+	settings.Translation.APIKey = maskAPIKey(settings.Translation.APIKey)
+	settings.Report.APIKey = maskAPIKey(settings.Report.APIKey)
+
 	return settings, nil
 }
 
 // SetAISettings updates the AI configuration.
 func (s *settingsService) SetAISettings(ctx context.Context, settings *AISettings) error {
-	if settings.Provider != "" {
-		if err := s.repo.Set(ctx, keyAIProvider, settings.Provider); err != nil {
-			return fmt.Errorf("set provider: %w", err)
-		}
+	if err := s.saveAIModelSettings(ctx, "", settings.Analysis); err != nil {
+		logger.Warn("ai settings update analysis config failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set analysis config: %w", err)
 	}
-	if err := s.setAPIKey(ctx, keyAIAPIKey, settings.APIKey); err != nil {
-		logger.Warn("ai settings update api key failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set api key: %w", err)
+	if err := s.saveAIModelSettings(ctx, keyAITranslatePrefix, settings.Translation); err != nil {
+		logger.Warn("ai settings update translation config failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set translation config: %w", err)
 	}
-	if err := s.repo.Set(ctx, keyAIBaseURL, settings.BaseURL); err != nil {
-		logger.Warn("ai settings update base url failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set base url: %w", err)
-	}
-	if err := s.repo.Set(ctx, keyAIModel, settings.Model); err != nil {
-		logger.Warn("ai settings update model failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "model", settings.Model, "error", err)
-		return fmt.Errorf("set model: %w", err)
-	}
-	if err := s.repo.Set(ctx, keyAIEndpoint, settings.Endpoint); err != nil {
-		logger.Warn("ai settings update endpoint failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "endpoint", settings.Endpoint, "error", err)
-		return fmt.Errorf("set endpoint: %w", err)
-	}
-	thinkingVal := "false"
-	if settings.Thinking {
-		thinkingVal = "true"
-	}
-	if err := s.repo.Set(ctx, keyAIThinking, thinkingVal); err != nil {
-		logger.Warn("ai settings update thinking failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set thinking: %w", err)
-	}
-	if err := s.repo.Set(ctx, keyAIThinkingBudget, fmt.Sprintf("%d", settings.ThinkingBudget)); err != nil {
-		logger.Warn("ai settings update thinking budget failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set thinking budget: %w", err)
-	}
-	if err := s.repo.Set(ctx, keyAIReasoningEffort, settings.ReasoningEffort); err != nil {
-		logger.Warn("ai settings update reasoning effort failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set reasoning effort: %w", err)
+	if err := s.saveAIModelSettings(ctx, keyAIReportPrefix, settings.Report); err != nil {
+		logger.Warn("ai settings update report config failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set report config: %w", err)
 	}
 	if err := s.repo.Set(ctx, keyAISummaryLanguage, settings.SummaryLanguage); err != nil {
 		logger.Warn("ai settings update summary language failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
@@ -237,17 +283,14 @@ func (s *settingsService) SetAISettings(ctx context.Context, settings *AISetting
 		logger.Warn("ai settings update auto translate title failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
 		return fmt.Errorf("set auto translate title: %w", err)
 	}
-	autoSummaryVal := "false"
-	if settings.AutoSummary {
-		autoSummaryVal = "true"
-	}
-	if err := s.repo.Set(ctx, keyAIAutoSummary, autoSummaryVal); err != nil {
-		logger.Warn("ai settings update auto summary failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
-		return fmt.Errorf("set auto summary: %w", err)
-	}
 	autoAnalysisVal := "false"
 	if settings.AutoAnalysis {
 		autoAnalysisVal = "true"
+	}
+	// Keep the legacy auto_summary key aligned so older data and callers still behave consistently.
+	if err := s.repo.Set(ctx, keyAIAutoSummary, autoAnalysisVal); err != nil {
+		logger.Warn("ai settings update auto summary compatibility failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set auto summary compatibility: %w", err)
 	}
 	if err := s.repo.Set(ctx, keyAIAutoAnalysis, autoAnalysisVal); err != nil {
 		logger.Warn("ai settings update auto analysis failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
@@ -265,7 +308,7 @@ func (s *settingsService) SetAISettings(ctx context.Context, settings *AISetting
 	if s.rateLimiter != nil {
 		s.rateLimiter.SetLimit(rateLimit)
 	}
-	logger.Info("ai settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "provider", settings.Provider, "model", settings.Model, "endpoint", settings.Endpoint, "rate_limit", rateLimit)
+	logger.Info("ai settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "analysis_provider", settings.Analysis.Provider, "analysis_model", settings.Analysis.Model, "rate_limit", rateLimit)
 	return nil
 }
 
@@ -400,6 +443,9 @@ func (s *settingsService) GetGeneralSettings(ctx context.Context) (*GeneralSetti
 	if val, err := s.getString(ctx, keyAIDailyReportAPIKey); err == nil && val != "" {
 		settings.AIDailyReportAPIKey = maskAPIKey(val)
 	}
+	if val, err := s.getString(ctx, keyAIAnalysisArchiveDir); err == nil {
+		settings.AIAnalysisArchiveDir = val
+	}
 
 	return settings, nil
 }
@@ -422,7 +468,11 @@ func (s *settingsService) SetGeneralSettings(ctx context.Context, settings *Gene
 		logger.Warn("general settings update ai daily report api key failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
 		return fmt.Errorf("set ai daily report api key: %w", err)
 	}
-	logger.Info("general settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "auto_readability", settings.AutoReadability)
+	if err := s.repo.Set(ctx, keyAIAnalysisArchiveDir, settings.AIAnalysisArchiveDir); err != nil {
+		logger.Warn("general settings update ai analysis archive dir failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set ai analysis archive dir: %w", err)
+	}
+	logger.Info("general settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "auto_readability", settings.AutoReadability, "ai_analysis_archive_dir", settings.AIAnalysisArchiveDir)
 	return nil
 }
 

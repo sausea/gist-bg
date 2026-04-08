@@ -680,6 +680,134 @@ func TestAIService_GetCachedAnalysis_ArchivesMarkdownOnCacheHit(t *testing.T) {
 	require.Contains(t, content, "cached summary")
 }
 
+func TestAIService_Analyze_ArchivesMarkdownUsingFolderArchiveDir(t *testing.T) {
+	server, _ := newAIAnalyzeTestServer(t)
+	defer server.Close()
+
+	db := testutil.NewTestDB(t)
+	settingsRepo := repository.NewSettingsRepository(db)
+	listRepo := repository.NewAIListTranslationRepository(db)
+	analysisRepo := repository.NewAIAnalysisRepository(db)
+	entryRepo := repository.NewEntryRepository(db)
+	feedRepo := repository.NewFeedRepository(db)
+	folderRepo := repository.NewFolderRepository(db)
+
+	testutil.SeedSetting(t, db, service.KeyAISummaryLanguage, "en-US")
+	testutil.SeedSetting(t, db, service.KeyAIProvider, ai.ProviderOpenAI)
+	testutil.SeedSetting(t, db, service.KeyAIAPIKey, "test-key")
+	testutil.SeedSetting(t, db, service.KeyAIBaseURL, server.URL+"/v1/")
+	testutil.SeedSetting(t, db, service.KeyAIModel, "gpt-4o-mini")
+	testutil.SeedSetting(t, db, service.KeyAIAnalysisArchiveDir, t.TempDir())
+
+	rootFolderID := testutil.SeedFolder(t, db, "CnNews", nil, "article")
+	require.NoError(t, folderRepo.UpdateAnalysisArchiveDir(context.Background(), rootFolderID, t.TempDir()))
+
+	feedID := testutil.SeedFeed(t, db, model.Feed{
+		Title:    "俄罗斯卫星通信社",
+		URL:      "https://example.com/feed",
+		FolderID: &rootFolderID,
+	})
+
+	originalTitle := "Nguyen Xuan Phuc elected president"
+	entryURL := "https://example.com/article/1"
+	entryID := testutil.SeedEntry(t, db, model.Entry{
+		FeedID: feedID,
+		Title:  &originalTitle,
+		URL:    &entryURL,
+	})
+
+	rootFolder, err := folderRepo.GetByID(context.Background(), rootFolderID)
+	require.NoError(t, err)
+
+	svc := service.NewAIService(
+		&summaryRepoStub{},
+		&translationRepoStub{},
+		listRepo,
+		analysisRepo,
+		settingsRepo,
+		ai.NewRateLimiter(100),
+		service.WithAIAnalysisArchive("", entryRepo, feedRepo, folderRepo),
+	)
+
+	_, err = svc.Analyze(context.Background(), entryID, "<p>Markets moved higher.</p>", originalTitle, false)
+	require.NoError(t, err)
+
+	expectedFile := filepath.Join(
+		rootFolder.AnalysisArchiveDir,
+		time.Now().In(time.Local).Format("20060102"),
+		"俄罗斯卫星通信社",
+		"美联储信号带动市场上涨.md",
+	)
+
+	data, err := os.ReadFile(expectedFile)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "# 美联储信号带动市场上涨")
+}
+
+func TestAIService_Analyze_ArchivesMarkdownUsingNearestParentFolderArchiveDir(t *testing.T) {
+	server, _ := newAIAnalyzeTestServer(t)
+	defer server.Close()
+
+	db := testutil.NewTestDB(t)
+	settingsRepo := repository.NewSettingsRepository(db)
+	listRepo := repository.NewAIListTranslationRepository(db)
+	analysisRepo := repository.NewAIAnalysisRepository(db)
+	entryRepo := repository.NewEntryRepository(db)
+	feedRepo := repository.NewFeedRepository(db)
+	folderRepo := repository.NewFolderRepository(db)
+
+	testutil.SeedSetting(t, db, service.KeyAISummaryLanguage, "en-US")
+	testutil.SeedSetting(t, db, service.KeyAIProvider, ai.ProviderOpenAI)
+	testutil.SeedSetting(t, db, service.KeyAIAPIKey, "test-key")
+	testutil.SeedSetting(t, db, service.KeyAIBaseURL, server.URL+"/v1/")
+	testutil.SeedSetting(t, db, service.KeyAIModel, "gpt-4o-mini")
+	testutil.SeedSetting(t, db, service.KeyAIAnalysisArchiveDir, t.TempDir())
+
+	parentFolderID := testutil.SeedFolder(t, db, "CnNews", nil, "article")
+	childFolderID := testutil.SeedFolder(t, db, "国际", &parentFolderID, "article")
+	parentArchiveDir := t.TempDir()
+	require.NoError(t, folderRepo.UpdateAnalysisArchiveDir(context.Background(), parentFolderID, parentArchiveDir))
+
+	feedID := testutil.SeedFeed(t, db, model.Feed{
+		Title:    "俄罗斯卫星通信社",
+		URL:      "https://example.com/feed",
+		FolderID: &childFolderID,
+	})
+
+	originalTitle := "Nguyen Xuan Phuc elected president"
+	entryURL := "https://example.com/article/1"
+	entryID := testutil.SeedEntry(t, db, model.Entry{
+		FeedID: feedID,
+		Title:  &originalTitle,
+		URL:    &entryURL,
+	})
+
+	svc := service.NewAIService(
+		&summaryRepoStub{},
+		&translationRepoStub{},
+		listRepo,
+		analysisRepo,
+		settingsRepo,
+		ai.NewRateLimiter(100),
+		service.WithAIAnalysisArchive("", entryRepo, feedRepo, folderRepo),
+	)
+
+	_, err := svc.Analyze(context.Background(), entryID, "<p>Markets moved higher.</p>", originalTitle, false)
+	require.NoError(t, err)
+
+	expectedFile := filepath.Join(
+		parentArchiveDir,
+		time.Now().In(time.Local).Format("20060102"),
+		"国际",
+		"俄罗斯卫星通信社",
+		"美联储信号带动市场上涨.md",
+	)
+
+	data, err := os.ReadFile(expectedFile)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "# 美联储信号带动市场上涨")
+}
+
 func TestAIService_BuildDailyAnalysisReport_Success(t *testing.T) {
 	repo := newSettingsRepoStub()
 	day := time.Date(2026, 3, 30, 16, 45, 0, 0, time.FixedZone("CST", 8*3600))

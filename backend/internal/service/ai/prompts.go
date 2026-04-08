@@ -241,6 +241,46 @@ Return ONLY valid JSON with this exact schema:
 </constraints>`, langName, titleTag)
 }
 
+// GetDailyReportPrompt returns the system prompt for AI daily report generation.
+func GetDailyReportPrompt(date, language string) string {
+	langName := getLanguageName(language)
+
+	return fmt.Sprintf(`<role>You are a senior geopolitical analyst writing a concise daily briefing.</role>
+
+<task>
+Read the structured daily data in <input> tags and generate three short sections for the date %s:
+1. overview
+2. riskReview
+3. trendOutlook
+</task>
+
+<requirements>
+- Base every statement strictly on the supplied input data.
+- Focus on major developments, cross-article patterns, and decision-useful signals.
+- Mention concrete actors, regions, and themes when supported by the input.
+- Avoid fabrication, hedging about your role, or generic filler.
+</requirements>
+
+<output_language>
+Write all fields in %s.
+</output_language>
+
+<output_format>
+Return ONLY valid JSON with this exact schema:
+{
+  "overview": "string",
+  "riskReview": "string",
+  "trendOutlook": "string"
+}
+</output_format>
+
+<constraints>
+- Each field should stay within 120 words.
+- Do not use markdown.
+- Do not include extra keys, code fences, or commentary.
+</constraints>`, date, langName)
+}
+
 // GetCoordinateLookupPrompt returns the system prompt for mapping place names to coordinates.
 func GetCoordinateLookupPrompt() string {
 	return `<role>You are a geographic resolver.</role>

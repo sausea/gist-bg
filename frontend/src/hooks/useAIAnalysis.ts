@@ -14,7 +14,8 @@ interface UseAIAnalysisReturn {
   aiAnalysis: AIAnalysis | null
   isLoadingAnalysis: boolean
   analysisError: string | null
-  handleToggleAnalysis: () => Promise<void>
+  requestAnalysis: (forReadability?: boolean) => Promise<void>
+  cancelAnalysis: () => void
 }
 
 export function useAIAnalysis({
@@ -100,28 +101,20 @@ export function useAIAnalysis({
     analysisAbortRef.current = null
   }, [entry, readableContent, t])
 
-  const handleToggleAnalysis = useCallback(async () => {
-    if (!entry) return
+  const requestAnalysis = useCallback(async (forReadability?: boolean) => {
+    analysisManuallyDisabledRef.current = false
+    await generateAnalysis(forReadability ?? isReadableActive)
+  }, [generateAnalysis, isReadableActive])
 
-    if (aiAnalysis && !isLoadingAnalysis) {
-      setAiAnalysis(null)
-      analysisRequestedRef.current = false
-      analysisManuallyDisabledRef.current = true
-      return
-    }
-
-    if (isLoadingAnalysis && analysisAbortRef.current) {
+  const cancelAnalysis = useCallback(() => {
+    if (analysisAbortRef.current) {
       analysisAbortRef.current.abort()
       analysisAbortRef.current = null
-      setIsLoadingAnalysis(false)
-      analysisRequestedRef.current = false
-      analysisManuallyDisabledRef.current = true
-      return
     }
-
-    analysisManuallyDisabledRef.current = false
-    await generateAnalysis(isReadableActive)
-  }, [entry, aiAnalysis, isLoadingAnalysis, isReadableActive, generateAnalysis])
+    setIsLoadingAnalysis(false)
+    analysisRequestedRef.current = false
+    analysisManuallyDisabledRef.current = true
+  }, [])
 
   useEffect(() => {
     if (prevReadableActiveRef.current !== isReadableActive) {
@@ -145,6 +138,7 @@ export function useAIAnalysis({
     aiAnalysis,
     isLoadingAnalysis,
     analysisError,
-    handleToggleAnalysis,
+    requestAnalysis,
+    cancelAnalysis,
   }
 }

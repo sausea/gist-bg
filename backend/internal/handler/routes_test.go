@@ -93,6 +93,7 @@ func TestHandler_RegisterRoutes(t *testing.T) {
 	assertRoute(t, routes, http.MethodGet, "/folders")
 	assertRoute(t, routes, http.MethodPut, "/folders/:id")
 	assertRoute(t, routes, http.MethodPatch, "/folders/:id/type")
+	assertRoute(t, routes, http.MethodPatch, "/folders/:id/archive-dir")
 	assertRoute(t, routes, http.MethodDelete, "/folders/:id")
 	assertRoute(t, routes, http.MethodDelete, "/folders")
 

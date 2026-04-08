@@ -13,7 +13,7 @@ export type ReasoningEffort =
 
 export type OpenAIEndpoint = "responses" | "chat/completions";
 
-export interface AISettings {
+export interface AIModelSettings {
   provider: AIProvider;
   apiKey: string;
   baseUrl: string;
@@ -22,10 +22,15 @@ export interface AISettings {
   thinking: boolean;
   thinkingBudget: number;
   reasoningEffort: ReasoningEffort;
+}
+
+export interface AISettings {
+  analysis: AIModelSettings;
+  translation: AIModelSettings;
+  report: AIModelSettings;
   summaryLanguage: string;
   autoTranslate: boolean;
   autoTranslateTitle: boolean;
-  autoSummary: boolean;
   autoAnalysis: boolean;
   rateLimit: number;
 }
@@ -51,6 +56,7 @@ export interface GeneralSettings {
   fallbackUserAgent: string;
   autoReadability: boolean;
   aiDailyReportApiKey: string;
+  aiAnalysisArchiveDir: string;
 }
 
 export type ProxyType = "http" | "socks5";

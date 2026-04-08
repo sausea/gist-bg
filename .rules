@@ -141,6 +141,7 @@
 | name | TEXT | NOT NULL | 文件夹名称 |
 | parent_id | INTEGER | FK -> folders(id) ON DELETE CASCADE | 父文件夹 ID |
 | type | TEXT | NOT NULL DEFAULT 'article' | 内容类型 (article/picture/notification) |
+| analysis_archive_dir | TEXT | | AI 分析 Markdown 归档根目录（可选，留空则继承上级或全局设置） |
 | created_at | TEXT | NOT NULL | 创建时间 (RFC3339) |
 | updated_at | TEXT | NOT NULL | 更新时间 (RFC3339) |
 

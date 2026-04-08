@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { listFolders, deleteFolders } from '@/api'
+import { listFolders, deleteFolders, updateFolderArchiveDir } from '@/api'
 import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime, compareStrings, getSortIcon } from '@/lib/table-utils'
 import type { Folder } from '@/types/api'
@@ -21,6 +21,17 @@ export function FoldersSettings() {
   const [error, setError] = useState<string | null>(null)
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  const [archiveDirs, setArchiveDirs] = useState<Record<string, string>>({})
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [saveMessage, setSaveMessage] = useState<Record<string, 'success' | 'error'>>({})
+
+  useEffect(() => {
+    setArchiveDirs(
+      Object.fromEntries(
+        folders.map((folder) => [folder.id, folder.analysisArchiveDir || ''])
+      )
+    )
+  }, [folders])
 
   const sortedFolders = useMemo(() => {
     return [...folders].sort((a, b) => {
@@ -90,6 +101,50 @@ export function FoldersSettings() {
   const isAllSelected = folders.length > 0 && selectedIds.size === folders.length
   const isPartialSelected = selectedIds.size > 0 && selectedIds.size < folders.length
 
+  const handleArchiveDirChange = (id: string, value: string) => {
+    setArchiveDirs((current) => ({
+      ...current,
+      [id]: value,
+    }))
+    setSaveMessage((current) => {
+      if (!(id in current)) {
+        return current
+      }
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }
+
+  const handleArchiveDirSave = async (folder: Folder) => {
+    setSavingId(folder.id)
+    setError(null)
+    try {
+      await updateFolderArchiveDir(folder.id, archiveDirs[folder.id] || '')
+      setSaveMessage((current) => ({
+        ...current,
+        [folder.id]: 'success',
+      }))
+      await refetch()
+      queryClient.invalidateQueries({ queryKey: ['folders'] })
+      window.setTimeout(() => {
+        setSaveMessage((current) => {
+          const next = { ...current }
+          delete next[folder.id]
+          return next
+        })
+      }, 2000)
+    } catch {
+      setSaveMessage((current) => ({
+        ...current,
+        [folder.id]: 'error',
+      }))
+      setError(t('folders.archive_dir_save_failed'))
+    } finally {
+      setSavingId(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-40 items-center justify-center">
@@ -148,7 +203,7 @@ export function FoldersSettings() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full min-w-[600px] text-sm">
+          <table className="w-full min-w-[920px] text-sm">
             <thead className="bg-muted/50">
               <tr>
                 <th className="w-10 px-3 py-2 text-left">
@@ -205,6 +260,9 @@ export function FoldersSettings() {
                     {t('folders.last_update')}
                     {renderSortIcon('updatedAt')}
                   </button>
+                </th>
+                <th className="w-[360px] px-3 py-2 text-left font-medium text-muted-foreground">
+                  {t('folders.analysis_archive_dir')}
                 </th>
               </tr>
             </thead>
@@ -274,6 +332,42 @@ export function FoldersSettings() {
                     </td>
                     <td className="hidden sm:table-cell px-3 py-2 text-muted-foreground">
                       {formatDateTime(folder.updatedAt)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={archiveDirs[folder.id] || ''}
+                          onChange={(e) => handleArchiveDirChange(folder.id, e.target.value)}
+                          placeholder={t('folders.analysis_archive_dir_placeholder')}
+                          className={cn(
+                            'h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-sm',
+                            'placeholder:text-muted-foreground/50',
+                            'focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20'
+                          )}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleArchiveDirSave(folder)}
+                          disabled={savingId === folder.id}
+                          className={cn(
+                            'h-9 shrink-0 rounded-md px-3 text-sm font-medium transition-colors',
+                            'bg-primary text-primary-foreground hover:bg-primary/90',
+                            'disabled:cursor-not-allowed disabled:opacity-50',
+                            saveMessage[folder.id] === 'success' && 'bg-green-600 hover:bg-green-600',
+                            saveMessage[folder.id] === 'error' && 'bg-destructive hover:bg-destructive'
+                          )}
+                        >
+                          {savingId === folder.id
+                            ? t('settings.saving')
+                            : saveMessage[folder.id] === 'success'
+                              ? t('settings.saved')
+                              : t('settings.save')}
+                        </button>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {t('folders.analysis_archive_dir_hint')}
+                      </div>
                     </td>
                   </tr>
                 )

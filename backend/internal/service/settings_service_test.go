@@ -16,9 +16,9 @@ func TestSettingsService_GetAISettings_Defaults(t *testing.T) {
 
 	settings, err := svc.GetAISettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, ai.ProviderOpenAI, settings.Provider)
-	require.Equal(t, 10000, settings.ThinkingBudget)
-	require.Equal(t, "medium", settings.ReasoningEffort)
+	require.Equal(t, ai.ProviderOpenAI, settings.Analysis.Provider)
+	require.Equal(t, 10000, settings.Analysis.ThinkingBudget)
+	require.Equal(t, "medium", settings.Analysis.ReasoningEffort)
 	require.Equal(t, "zh-CN", settings.SummaryLanguage)
 	require.False(t, settings.AutoAnalysis)
 	require.Equal(t, ai.DefaultRateLimit, settings.RateLimit)
@@ -42,12 +42,12 @@ func TestSettingsService_GetAISettings_MaskedKey(t *testing.T) {
 	svc := service.NewSettingsService(repo, ai.NewRateLimiter(0))
 	settings, err := svc.GetAISettings(context.Background())
 	require.NoError(t, err)
-	require.NotEqual(t, "sk-test-1234567890", settings.APIKey)
-	require.NotEmpty(t, settings.APIKey)
-	require.Equal(t, ai.ProviderOpenAI, settings.Provider)
-	require.Equal(t, "gpt-4", settings.Model)
-	require.True(t, settings.Thinking)
-	require.Equal(t, 9000, settings.ThinkingBudget)
+	require.NotEqual(t, "sk-test-1234567890", settings.Analysis.APIKey)
+	require.NotEmpty(t, settings.Analysis.APIKey)
+	require.Equal(t, ai.ProviderOpenAI, settings.Analysis.Provider)
+	require.Equal(t, "gpt-4", settings.Analysis.Model)
+	require.True(t, settings.Analysis.Thinking)
+	require.Equal(t, 9000, settings.Analysis.ThinkingBudget)
 	require.True(t, settings.AutoAnalysis)
 	require.Equal(t, 5, settings.RateLimit)
 }
@@ -58,16 +58,28 @@ func TestSettingsService_SetAISettings_StoresAndUpdatesLimiter(t *testing.T) {
 	svc := service.NewSettingsService(repo, limiter)
 
 	settings := &service.AISettings{
-		Provider:        ai.ProviderOpenAI,
-		APIKey:          "sk-realkey-123",
-		BaseURL:         "https://api.example.com",
-		Model:           "gpt-4",
-		Thinking:        true,
-		ThinkingBudget:  5000,
-		ReasoningEffort: "high",
+		Analysis: service.AIModelSettings{
+			Provider:        ai.ProviderOpenAI,
+			APIKey:          "sk-realkey-123",
+			BaseURL:         "https://api.example.com",
+			Model:           "gpt-4",
+			Thinking:        true,
+			ThinkingBudget:  5000,
+			ReasoningEffort: "high",
+		},
+		Translation: service.AIModelSettings{
+			Provider: ai.ProviderCompatible,
+			APIKey:   "translate-key",
+			BaseURL:  "https://translate.example.com/v1",
+			Model:    "translate-model",
+		},
+		Report: service.AIModelSettings{
+			Provider: ai.ProviderAnthropic,
+			APIKey:   "report-key",
+			Model:    "claude-report",
+		},
 		SummaryLanguage: "en-US",
 		AutoTranslate:   true,
-		AutoSummary:     true,
 		AutoAnalysis:    true,
 		RateLimit:       20,
 	}
@@ -75,11 +87,13 @@ func TestSettingsService_SetAISettings_StoresAndUpdatesLimiter(t *testing.T) {
 	err := svc.SetAISettings(context.Background(), settings)
 	require.NoError(t, err)
 	require.Equal(t, "sk-realkey-123", repo.data[service.KeyAIAPIKey])
+	require.Equal(t, "translate-key", repo.data["ai.translate.api_key"])
+	require.Equal(t, "report-key", repo.data["ai.report.api_key"])
 	require.Equal(t, "true", repo.data[service.KeyAIAutoAnalysis])
 	require.Equal(t, 20, limiter.GetLimit())
 
 	repo.data[service.KeyAIAPIKey] = "sk-existing"
-	settings.APIKey = "***"
+	settings.Analysis.APIKey = "***"
 	settings.RateLimit = 0
 	err = svc.SetAISettings(context.Background(), settings)
 	require.NoError(t, err)
@@ -92,9 +106,10 @@ func TestSettingsService_GeneralSettings(t *testing.T) {
 	svc := service.NewSettingsService(repo, ai.NewRateLimiter(0))
 
 	err := svc.SetGeneralSettings(context.Background(), &service.GeneralSettings{
-		FallbackUserAgent:   "UA-Test",
-		AutoReadability:     true,
-		AIDailyReportAPIKey: "report-secret-123",
+		FallbackUserAgent:    "UA-Test",
+		AutoReadability:      true,
+		AIDailyReportAPIKey:  "report-secret-123",
+		AIAnalysisArchiveDir: "/tmp/gist-ai",
 	})
 	require.NoError(t, err)
 
@@ -104,15 +119,17 @@ func TestSettingsService_GeneralSettings(t *testing.T) {
 	require.True(t, settings.AutoReadability)
 	require.NotEqual(t, "report-secret-123", settings.AIDailyReportAPIKey)
 	require.NotEmpty(t, settings.AIDailyReportAPIKey)
+	require.Equal(t, "/tmp/gist-ai", settings.AIAnalysisArchiveDir)
 
 	ua := svc.GetFallbackUserAgent(context.Background())
 	require.Equal(t, "UA-Test", ua)
 	require.Equal(t, "report-secret-123", svc.GetAIDailyReportAccessKey(context.Background()))
 
 	err = svc.SetGeneralSettings(context.Background(), &service.GeneralSettings{
-		FallbackUserAgent:   "UA-Test",
-		AutoReadability:     false,
-		AIDailyReportAPIKey: "",
+		FallbackUserAgent:    "UA-Test",
+		AutoReadability:      false,
+		AIDailyReportAPIKey:  "",
+		AIAnalysisArchiveDir: "",
 	})
 	require.NoError(t, err)
 	require.Empty(t, svc.GetAIDailyReportAccessKey(context.Background()))

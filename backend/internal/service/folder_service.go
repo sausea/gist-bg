@@ -7,10 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
-	"gist/backend/pkg/logger"
 	"gist/backend/internal/model"
 	"gist/backend/internal/repository"
+	"gist/backend/pkg/logger"
 )
 
 type FolderService interface {
@@ -18,6 +19,7 @@ type FolderService interface {
 	List(ctx context.Context) ([]model.Folder, error)
 	Update(ctx context.Context, id int64, name string, parentID *int64) (model.Folder, error)
 	UpdateType(ctx context.Context, id int64, folderType string) error
+	UpdateAnalysisArchiveDir(ctx context.Context, id int64, archiveDir string) (model.Folder, error)
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -163,6 +165,32 @@ func (s *folderService) UpdateType(ctx context.Context, id int64, folderType str
 
 	logger.Info("folder type updated", "module", "service", "action", "update", "resource", "folder", "result", "ok", "folder_id", id, "type", folderType)
 	return nil
+}
+
+func (s *folderService) UpdateAnalysisArchiveDir(ctx context.Context, id int64, archiveDir string) (model.Folder, error) {
+	folder, err := s.folders.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Folder{}, ErrNotFound
+		}
+		return model.Folder{}, fmt.Errorf("get folder: %w", err)
+	}
+
+	archiveDir = strings.TrimSpace(archiveDir)
+	if err := s.folders.UpdateAnalysisArchiveDir(ctx, id, archiveDir); err != nil {
+		logger.Error("folder archive dir update failed", "module", "service", "action", "update", "resource", "folder", "result", "failed", "folder_id", id, "archive_dir", archiveDir, "error", err)
+		return model.Folder{}, err
+	}
+
+	folder.AnalysisArchiveDir = archiveDir
+	folder.UpdatedAt = time.Now().UTC()
+	refreshed, err := s.folders.GetByID(ctx, id)
+	if err == nil {
+		folder = refreshed
+	}
+
+	logger.Info("folder archive dir updated", "module", "service", "action", "update", "resource", "folder", "result", "ok", "folder_id", id, "archive_dir", archiveDir)
+	return folder, nil
 }
 
 func (s *folderService) Delete(ctx context.Context, id int64) error {

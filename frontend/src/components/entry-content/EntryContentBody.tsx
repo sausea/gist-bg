@@ -8,7 +8,6 @@ import { isSafeUrl } from "@/lib/url";
 import { ArticleContent } from "@/components/ui/article-content";
 import type { ArticleContentBlock } from "@/components/ui/article-content";
 import { UserIcon, CalendarIcon, ClockIcon } from "@/components/ui/icons";
-import { AiSummaryBox } from "./AiSummaryBox";
 import { AiAnalysisBox } from "./AiAnalysisBox";
 import { BackToTopButton } from "./BackToTopButton";
 import type { Entry } from "@/types/api";
@@ -23,15 +22,11 @@ interface EntryContentBodyProps {
   displayContent: string | null | undefined;
   displayBlocks?: ArticleContentBlock[] | null;
   highlightContent?: string;
-  aiSummary?: string | null;
   aiAnalysis?: AIAnalysis | null;
   isLoadingAnalysis?: boolean;
   analysisError?: string | null;
-  isLoadingSummary?: boolean;
-  summaryError?: string | null;
   isBackgroundAIProcessing?: boolean;
   aiProcessingQueued?: boolean;
-  isBackgroundSummaryProcessing?: boolean;
   isBackgroundAnalysisProcessing?: boolean;
 }
 
@@ -44,15 +39,11 @@ export function EntryContentBody({
   displayContent,
   displayBlocks,
   highlightContent,
-  aiSummary,
   aiAnalysis,
   isLoadingAnalysis,
   analysisError,
-  isLoadingSummary,
-  summaryError,
   isBackgroundAIProcessing,
   aiProcessingQueued,
-  isBackgroundSummaryProcessing,
   isBackgroundAnalysisProcessing,
 }: EntryContentBodyProps) {
   const { t } = useTranslation();
@@ -131,13 +122,6 @@ export function EntryContentBody({
 
           <hr className="border-border/60" />
         </header>
-
-        <AiSummaryBox
-          content={aiSummary ?? null}
-          isLoading={isLoadingSummary}
-          error={summaryError}
-          isBackgroundProcessing={isBackgroundSummaryProcessing}
-        />
 
         <AiAnalysisBox
           analysis={aiAnalysis ?? null}

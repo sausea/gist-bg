@@ -1,25 +1,24 @@
 # Gist
 
-[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/9bingyin/Gist) [![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=flat&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/9bingyin/Gist)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/9bingyin/Gist) [![zread]
 
 [![GitHub Release](https://img.shields.io/github/v/release/9bingyin/Gist)](https://github.com/9bingyin/Gist/releases/latest) [![Build Docker Image](https://github.com/9bingyin/Gist/actions/workflows/docker-build.yml/badge.svg)](https://github.com/9bingyin/Gist/actions/workflows/docker-build.yml)
 
-轻量级自托管 RSS 阅读器，内置 AI 摘要、翻译、结构化分析与日报能力。
+轻量级自托管 RSS 阅读器，内置 AI 翻译、结构化分析与 AI 日报能力。
 
-![desktop](docs/images/desktop.png)
 
 ## 功能特性
 
 - 全格式订阅，支持 RSS 2.0 / Atom / JSON Feed
 - Readability 沉浸式阅读模式
-- AI 摘要、翻译、结构化分析，支持 OpenAI / Anthropic / 兼容接口（BYOK）
-- AI 自动摘要与自动分析，可在文章进入系统后后台异步处理
-- 文章详情页展示 AI 后台任务状态
+- AI 翻译、结构化分析与日报，支持 OpenAI / Anthropic / 兼容接口（BYOK）
+- AI 分析可自动后台异步处理，详情页直接复用 AI 分析中的摘要字段
+- 文章详情页展示 AI 后台任务状态，仅显示 AI 分析卡片
 - AI 分析库页面，集中查看已入库的 AI 分析结果
 - AI 日报页面，基于已入库分析结果按日聚合
 - AI 日报与 AI 分析库支持通过共享 API Key 免登录供外部系统调用
 - AI 分析结果会在数据库中持久化，分析标题会翻译为中文后再用于入库展示
-- AI 分析完成后自动归档为 Markdown 文件，按日期 / 订阅文件夹 / 订阅源保存
+- AI 分析完成后自动归档为 Markdown 文件，支持全局目录与文件夹级目录，按日期 / 订阅文件夹 / 订阅源保存
 - 文件夹分层管理与内容分类
 - 浅色 / 深色 / 跟随系统主题
 - PWA，可安装到桌面和移动设备
@@ -27,17 +26,35 @@
 
 ## AI 相关新增说明
 
+### AI 能力划分
+
+- 当前 AI 能力主要包括三部分：
+  - AI 翻译
+  - AI 分析
+  - AI 日报
+- 设置页支持分别配置三组模型：
+  - `AI 翻译`
+  - `AI 分析`
+  - `AI 日报`
+- 文章详情页不再单独展示 “AI 摘要” 卡片，而是直接展示 “AI 分析” 卡片
+- AI 分析结果中的 `summary` 字段会直接作为详情页摘要内容复用
+
 ### AI 分析库
 
 - 后端会将 AI 分析结果保存到数据库中的 `ai_analyses`
 - AI 分析库标题优先读取中文翻译缓存 `ai_list_translations`
 - 前端页面入口为 `/ai-analyses`
+- 点击 AI 分析库中的文章会直接在新标签页打开原始文章链接
 
 ### AI 日报
 
 - AI 日报基于当日已入库的 AI 分析结果实时聚合
 - 前端页面入口为 `/ai-daily-report`
 - 后端接口为 `GET /api/ai/reports/daily?date=YYYY-MM-DD`
+- 日报输出结构为：
+  - 今日热点综述
+  - 风险点评
+  - 趋势判断
 
 ### 外部系统免登录调用
 
@@ -53,49 +70,23 @@
 ### AI Markdown 归档
 
 - AI 分析完成后会额外生成一份 Markdown 文件
-- 当前后端启动配置会将分析结果保存到 `/Users/usr/gist-data`
+- 默认归档根目录为 `/Users/usr/gist-data`
+- 可在“设置 -> 通用”中配置全局 `AI 分析归档目录`
+- 可在“设置 -> 文件夹”中为每个订阅文件夹单独配置 `AI 归档目录`
+- 归档目录优先级如下：
+  - 当前订阅文件夹的归档目录
+  - 最近父文件夹的归档目录
+  - 通用设置中的全局 `AI 分析归档目录`
+  - 服务启动时的默认目录
 - 路径结构示例：
 
 ```text
 /Users/usr/gist-data/20260407/CnNews/俄罗斯卫星通信社/阮春福当选国家主席.md
 ```
 
-## 部署
+- 当某个文件夹配置了独立归档目录后，该文件夹下的新分析结果会写入该目录
+- 已生成的历史 Markdown 文件不会自动迁移
 
-### Docker Compose（推荐）
-
-```bash
-curl -O https://raw.githubusercontent.com/9bingyin/Gist/main/docker-compose.yml
-docker compose up -d
-```
-
-或手动创建 `docker-compose.yml`：
-
-```yaml
-services:
-  gist:
-    image: ghcr.io/9bingyin/gist:latest
-    container_name: gist
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - GIST_LOG_LEVEL=info
-    restart: always
-```
-
-访问 [http://localhost:8080](http://localhost:8080)，数据持久化在 `./data` 目录。
-
-### Docker Run
-
-```bash
-docker run -d \
-  --name gist \
-  -p 8080:8080 \
-  -v ./data:/app/data \
-  ghcr.io/9bingyin/gist:latest
-```
 
 ### 离线部署（无外网）
 
@@ -103,26 +94,6 @@ docker run -d \
 
 详见 [offline-docker.md](/Users/usr/Gist-bg/docs/offline-docker.md)。
 
-### 本地构建 Docker 镜像
-
-项目已内置多阶段构建文件 [Dockerfile](/Users/usr/Gist-bg/docker/Dockerfile)。
-
-```bash
-cd /Users/usr/Gist-bg
-docker build -f docker/Dockerfile -t gist:local .
-```
-
-运行示例：
-
-```bash
-docker run -d \
-  --name gist \
-  -p 8080:8080 \
-  -v /Users/usr/gist-data:/app/data \
-  -e GIST_LOG_LEVEL=info \
-  -e GIST_EXPORT_DIR=/app/data \
-  gist:local
-```
 
 ## 环境变量
 
@@ -164,6 +135,13 @@ bun run dev
 ```
 
 然后访问 Vite 输出的本地地址，通常是 [http://localhost:5173](http://localhost:5173)。
+
+首次进入后可在设置页继续完成：
+
+- AI 翻译 / AI 分析 / AI 日报模型配置
+- AI 日报共享访问密钥配置
+- 全局 AI 分析归档目录配置
+- 文件夹级 AI 归档目录配置
 
 ### 方式二：前端先构建，后端直接托管静态文件
 

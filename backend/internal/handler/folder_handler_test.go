@@ -153,6 +153,37 @@ func TestFolderHandler_UpdateType_Success(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+func TestFolderHandler_UpdateArchiveDir_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockFolderService(ctrl)
+	h := handler.NewFolderHandlerHelper(mockService)
+
+	e := newTestEcho()
+	reqBody := map[string]interface{}{
+		"analysisArchiveDir": "/tmp/cnnews",
+	}
+	req := newJSONRequest(http.MethodPatch, "/folders/123/archive-dir", reqBody)
+	c, rec := newTestContext(e, req)
+	setPathParams(c, map[string]string{"id": "123"})
+
+	mockService.EXPECT().
+		UpdateAnalysisArchiveDir(gomock.Any(), int64(123), "/tmp/cnnews").
+		Return(model.Folder{
+			ID:                 123,
+			Name:               "CnNews",
+			AnalysisArchiveDir: "/tmp/cnnews",
+		}, nil)
+
+	err := h.UpdateArchiveDir(c)
+	require.NoError(t, err)
+
+	var resp handler.FolderResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, "/tmp/cnnews", resp.AnalysisArchiveDir)
+}
+
 func TestFolderHandler_DeleteBatch_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

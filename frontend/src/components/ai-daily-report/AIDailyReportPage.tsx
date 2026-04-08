@@ -42,6 +42,31 @@ function MetricPill({ item }: { item: AIDailyReportCountItem }) {
   );
 }
 
+function InsightSection({
+  title,
+  content,
+}: {
+  title: string;
+  content?: string;
+}) {
+  if (!content) return null;
+
+  return (
+    <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
+      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      <div className="mt-3 space-y-2 text-sm leading-7 text-foreground/85">
+        {content
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line, index) => (
+            <p key={`${title}-${index}`}>{line}</p>
+          ))}
+      </div>
+    </section>
+  );
+}
+
 export function AIDailyReportPage({
   isMobile = false,
   onMenuClick,
@@ -182,7 +207,25 @@ export function AIDailyReportPage({
             )}
 
             {data.total > 0 && (
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,1fr)]">
+              <div className="space-y-6">
+                {(data.overview || data.riskReview || data.trendOutlook) && (
+                  <div className="grid gap-4 xl:grid-cols-3">
+                    <InsightSection
+                      title={t("ai_daily_report_page.overview")}
+                      content={data.overview}
+                    />
+                    <InsightSection
+                      title={t("ai_daily_report_page.risk_review")}
+                      content={data.riskReview}
+                    />
+                    <InsightSection
+                      title={t("ai_daily_report_page.trend_outlook")}
+                      content={data.trendOutlook}
+                    />
+                  </div>
+                )}
+
+                <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,1fr)]">
                 <section className="space-y-4">
                   <div className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
                     <div className="flex items-center justify-between gap-3">
@@ -326,6 +369,7 @@ export function AIDailyReportPage({
                     </div>
                   </section>
                 </aside>
+                </div>
               </div>
             )}
           </div>

@@ -160,6 +160,22 @@ func TestFolderRepository_UpdateType(t *testing.T) {
 	require.Equal(t, "picture", folder.Type)
 }
 
+func TestFolderRepository_UpdateAnalysisArchiveDir(t *testing.T) {
+	t.Parallel()
+	db := testutil.NewTestDB(t)
+	repo := repository.NewFolderRepository(db)
+	ctx := context.Background()
+
+	id := testutil.SeedFolder(t, db, "Folder", nil, "article")
+
+	err := repo.UpdateAnalysisArchiveDir(ctx, id, "/tmp/folder-archive")
+	require.NoError(t, err)
+
+	folder, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/folder-archive", folder.AnalysisArchiveDir)
+}
+
 func TestFolderRepository_Delete_Success(t *testing.T) {
 	t.Parallel()
 	db := testutil.NewTestDB(t)

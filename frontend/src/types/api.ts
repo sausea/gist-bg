@@ -5,6 +5,7 @@ export interface Folder {
   name: string
   parentId?: string
   type: ContentType
+  analysisArchiveDir?: string
   createdAt: string
   updatedAt: string
 }

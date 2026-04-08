@@ -171,6 +171,10 @@ func (s *folderServiceStub) UpdateType(ctx context.Context, id int64, folderType
 	return nil
 }
 
+func (s *folderServiceStub) UpdateAnalysisArchiveDir(ctx context.Context, id int64, archiveDir string) (model.Folder, error) {
+	return model.Folder{}, nil
+}
+
 func (s *folderServiceStub) Delete(ctx context.Context, id int64) error {
 	return nil
 }

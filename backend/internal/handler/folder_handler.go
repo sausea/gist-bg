@@ -7,9 +7,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"gist/backend/pkg/logger"
 	"gist/backend/internal/model"
 	"gist/backend/internal/service"
+	"gist/backend/pkg/logger"
 )
 
 type FolderHandler struct {
@@ -17,13 +17,18 @@ type FolderHandler struct {
 }
 
 type folderRequest struct {
-	Name     string  `json:"name"`
-	ParentID *string `json:"parentId"`
-	Type     string  `json:"type"`
+	Name               string  `json:"name"`
+	ParentID           *string `json:"parentId"`
+	Type               string  `json:"type"`
+	AnalysisArchiveDir string  `json:"analysisArchiveDir"`
 }
 
 type updateFolderTypeRequest struct {
 	Type string `json:"type"`
+}
+
+type updateFolderArchiveDirRequest struct {
+	AnalysisArchiveDir string `json:"analysisArchiveDir"`
 }
 
 type deleteFoldersRequest struct {
@@ -31,12 +36,13 @@ type deleteFoldersRequest struct {
 }
 
 type folderResponse struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	ParentID  *string `json:"parentId,omitempty"`
-	Type      string  `json:"type"`
-	CreatedAt string  `json:"createdAt"`
-	UpdatedAt string  `json:"updatedAt"`
+	ID                 string  `json:"id"`
+	Name               string  `json:"name"`
+	ParentID           *string `json:"parentId,omitempty"`
+	Type               string  `json:"type"`
+	AnalysisArchiveDir string  `json:"analysisArchiveDir,omitempty"`
+	CreatedAt          string  `json:"createdAt"`
+	UpdatedAt          string  `json:"updatedAt"`
 }
 
 func NewFolderHandler(service service.FolderService) *FolderHandler {
@@ -48,6 +54,7 @@ func (h *FolderHandler) RegisterRoutes(g *echo.Group) {
 	g.GET("/folders", h.List)
 	g.PUT("/folders/:id", h.Update)
 	g.PATCH("/folders/:id/type", h.UpdateType)
+	g.PATCH("/folders/:id/archive-dir", h.UpdateArchiveDir)
 	g.DELETE("/folders/:id", h.Delete)
 	g.DELETE("/folders", h.DeleteBatch)
 }
@@ -179,6 +186,38 @@ func (h *FolderHandler) UpdateType(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// UpdateArchiveDir updates the AI analysis archive directory of a folder.
+// @Summary Update folder archive directory
+// @Description Change the AI analysis markdown archive directory for a folder
+// @Tags folders
+// @Accept json
+// @Param id path int true "Folder ID"
+// @Param request body updateFolderArchiveDirRequest true "Archive directory update request"
+// @Success 200 {object} folderResponse
+// @Failure 400 {object} errorResponse
+// @Failure 404 {object} errorResponse
+// @Router /folders/{id}/archive-dir [patch]
+func (h *FolderHandler) UpdateArchiveDir(c echo.Context) error {
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	}
+
+	var req updateFolderArchiveDirRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	}
+
+	folder, err := h.service.UpdateAnalysisArchiveDir(c.Request().Context(), id, req.AnalysisArchiveDir)
+	if err != nil {
+		logger.Error("folder archive dir update failed", "module", "handler", "action", "update", "resource", "folder", "result", "failed", "folder_id", id, "archive_dir", req.AnalysisArchiveDir, "error", err)
+		return writeServiceError(c, err)
+	}
+
+	logger.Info("folder archive dir updated", "module", "handler", "action", "update", "resource", "folder", "result", "ok", "folder_id", id, "archive_dir", req.AnalysisArchiveDir)
+	return c.JSON(http.StatusOK, toFolderResponse(folder))
+}
+
 // Delete deletes a folder.
 // @Summary Delete a folder
 // @Description Delete an existing folder
@@ -236,11 +275,12 @@ func (h *FolderHandler) DeleteBatch(c echo.Context) error {
 
 func toFolderResponse(folder model.Folder) folderResponse {
 	return folderResponse{
-		ID:        idToString(folder.ID),
-		Name:      folder.Name,
-		ParentID:  idPtrToString(folder.ParentID),
-		Type:      folder.Type,
-		CreatedAt: folder.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: folder.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:                 idToString(folder.ID),
+		Name:               folder.Name,
+		ParentID:           idPtrToString(folder.ParentID),
+		Type:               folder.Type,
+		AnalysisArchiveDir: folder.AnalysisArchiveDir,
+		CreatedAt:          folder.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:          folder.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
