@@ -652,7 +652,19 @@ func (s *settingsServiceStub) GetAISettings(ctx context.Context) (*service.AISet
 	return nil, nil
 }
 
+func (s *settingsServiceStub) GetAIPromptSettings(ctx context.Context) (*service.AIPromptSettings, error) {
+	return &service.AIPromptSettings{}, nil
+}
+
+func (s *settingsServiceStub) GetAIUsageStats(ctx context.Context, days int) (*service.AIUsageStats, error) {
+	return &service.AIUsageStats{}, nil
+}
+
 func (s *settingsServiceStub) SetAISettings(ctx context.Context, settings *service.AISettings) error {
+	return nil
+}
+
+func (s *settingsServiceStub) SetAIPromptSettings(ctx context.Context, settings *service.AIPromptSettings) error {
 	return nil
 }
 

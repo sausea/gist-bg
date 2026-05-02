@@ -360,6 +360,59 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	// Migration 19: Create ai_analysis_jobs table for persistent AI analysis queue tracking.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS ai_analysis_jobs (
+			id INTEGER PRIMARY KEY,
+			entry_id INTEGER NOT NULL UNIQUE,
+			feed_id INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			source TEXT NOT NULL,
+			content_mode TEXT NOT NULL,
+			language TEXT NOT NULL,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+			FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+		)
+	`); err != nil {
+		return fmt.Errorf("create ai_analysis_jobs table: %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ai_analysis_jobs_status_updated ON ai_analysis_jobs(status, updated_at)`); err != nil {
+		return fmt.Errorf("create idx_ai_analysis_jobs_status_updated: %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ai_analysis_jobs_feed_id ON ai_analysis_jobs(feed_id)`); err != nil {
+		return fmt.Errorf("create idx_ai_analysis_jobs_feed_id: %w", err)
+	}
+
+	// Migration 20: Create entry_focus_tags table for user-defined focus labels.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS entry_focus_tags (
+			id INTEGER PRIMARY KEY,
+			entry_id INTEGER NOT NULL,
+			tag TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+		)
+	`); err != nil {
+		return fmt.Errorf("create entry_focus_tags table: %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_focus_tags_entry_tag ON entry_focus_tags(entry_id, tag)`); err != nil {
+		return fmt.Errorf("create idx_entry_focus_tags_entry_tag: %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_entry_focus_tags_entry_id ON entry_focus_tags(entry_id)`); err != nil {
+		return fmt.Errorf("create idx_entry_focus_tags_entry_id: %w", err)
+	}
+
 	return nil
 }
 

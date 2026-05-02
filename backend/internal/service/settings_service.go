@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
+	"strings"
+	"time"
 
 	"gist/backend/internal/repository"
 	"gist/backend/internal/service/ai"
@@ -34,6 +37,22 @@ type AISettings struct {
 	AutoTranslateTitle bool            `json:"autoTranslateTitle"`
 	AutoAnalysis       bool            `json:"autoAnalysis"`
 	RateLimit          int             `json:"rateLimit"`
+	WorkerCount        int             `json:"workerCount"`
+}
+
+// AIPromptTemplate holds one editable AI prompt template.
+type AIPromptTemplate struct {
+	Key            string   `json:"key"`
+	FileName       string   `json:"fileName"`
+	Variables      []string `json:"variables"`
+	Content        string   `json:"content"`
+	DefaultContent string   `json:"defaultContent"`
+}
+
+// AIPromptSettings holds the editable AI prompt template collection.
+type AIPromptSettings struct {
+	Dir       string             `json:"dir"`
+	Templates []AIPromptTemplate `json:"templates"`
 }
 
 // GeneralSettings holds general application settings.
@@ -76,6 +95,7 @@ const (
 	keyAIAutoSummary        = "ai.auto_summary"
 	keyAIAutoAnalysis       = "ai.auto_analysis"
 	keyAIRateLimit          = "ai.rate_limit"
+	keyAIWorkerCount        = "ai.worker_count"
 	keyAITranslatePrefix    = "ai.translate."
 	keyAIReportPrefix       = "ai.report."
 
@@ -99,9 +119,15 @@ const (
 type SettingsService interface {
 	// GetAISettings returns the AI configuration with masked API keys.
 	GetAISettings(ctx context.Context) (*AISettings, error)
+	// GetAIPromptSettings returns editable AI prompt templates.
+	GetAIPromptSettings(ctx context.Context) (*AIPromptSettings, error)
+	// GetAIUsageStats returns aggregated AI token usage statistics.
+	GetAIUsageStats(ctx context.Context, days int) (*AIUsageStats, error)
 	// SetAISettings updates the AI configuration.
 	// If apiKey is empty string, it keeps the existing key.
 	SetAISettings(ctx context.Context, settings *AISettings) error
+	// SetAIPromptSettings updates editable AI prompt templates.
+	SetAIPromptSettings(ctx context.Context, settings *AIPromptSettings) error
 	// TestAI tests the AI connection with the given configuration.
 	TestAI(ctx context.Context, provider, apiKey, baseURL, model, endpoint string, thinking bool, thinkingBudget int, reasoningEffort string) (string, error)
 	// GetGeneralSettings returns the general settings.
@@ -132,11 +158,31 @@ type SettingsService interface {
 type settingsService struct {
 	repo        repository.SettingsRepository
 	rateLimiter *ai.RateLimiter
+	promptMgr   *ai.PromptManager
 }
 
+type SettingsServiceOption func(*settingsService)
+
 // NewSettingsService creates a new settings service.
-func NewSettingsService(repo repository.SettingsRepository, rateLimiter *ai.RateLimiter) SettingsService {
-	return &settingsService{repo: repo, rateLimiter: rateLimiter}
+func NewSettingsService(repo repository.SettingsRepository, rateLimiter *ai.RateLimiter, options ...SettingsServiceOption) SettingsService {
+	svc := &settingsService{
+		repo:        repo,
+		rateLimiter: rateLimiter,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(svc)
+		}
+	}
+	return svc
+}
+
+func WithSettingsPromptManager(manager *ai.PromptManager) SettingsServiceOption {
+	return func(s *settingsService) {
+		if manager != nil {
+			s.promptMgr = manager
+		}
+	}
 }
 
 func defaultAIModelSettings() AIModelSettings {
@@ -241,12 +287,120 @@ func (s *settingsService) GetAISettings(ctx context.Context) (*AISettings, error
 	} else {
 		settings.RateLimit = ai.DefaultRateLimit
 	}
+	if val, err := s.getInt(ctx, keyAIWorkerCount); err == nil && val > 0 {
+		settings.WorkerCount = normalizeAIWorkerCount(val)
+	} else {
+		settings.WorkerCount = defaultAIStreamWorkers
+	}
 
 	settings.Analysis.APIKey = maskAPIKey(settings.Analysis.APIKey)
 	settings.Translation.APIKey = maskAPIKey(settings.Translation.APIKey)
 	settings.Report.APIKey = maskAPIKey(settings.Report.APIKey)
 
 	return settings, nil
+}
+
+func (s *settingsService) GetAIPromptSettings(ctx context.Context) (*AIPromptSettings, error) {
+	if s.promptMgr == nil {
+		s.promptMgr = ai.NewPromptManager("")
+	}
+	templates, err := s.promptMgr.ListTemplates()
+	if err != nil {
+		return nil, fmt.Errorf("list ai prompt templates: %w", err)
+	}
+
+	items := make([]AIPromptTemplate, 0, len(templates))
+	for _, template := range templates {
+		items = append(items, AIPromptTemplate{
+			Key:            template.Key,
+			FileName:       template.FileName,
+			Variables:      append([]string(nil), template.Variables...),
+			Content:        template.Content,
+			DefaultContent: template.DefaultContent,
+		})
+	}
+
+	return &AIPromptSettings{
+		Dir:       s.promptMgr.Dir(),
+		Templates: items,
+	}, nil
+}
+
+func (s *settingsService) GetAIUsageStats(ctx context.Context, days int) (*AIUsageStats, error) {
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	settings, err := s.repo.GetByPrefix(ctx, keyAIUsageDailyPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("get ai usage stats: %w", err)
+	}
+
+	parsedDays := make([]storedAIUsageDayStats, 0, len(settings))
+	for _, setting := range settings {
+		fallbackDate := parseAIUsageDateFromKey(setting.Key)
+		day, err := decodeStoredAIUsageDayStats(setting.Value, fallbackDate)
+		if err != nil {
+			logger.Warn("ai usage stats decode failed", "module", "service", "action", "list", "resource", "ai_usage", "result", "failed", "key", setting.Key, "error", err)
+			continue
+		}
+		if strings.TrimSpace(day.Date) == "" {
+			continue
+		}
+		parsedDays = append(parsedDays, day)
+	}
+
+	sort.Slice(parsedDays, func(i, j int) bool {
+		return parsedDays[i].Date > parsedDays[j].Date
+	})
+
+	stats := &AIUsageStats{
+		Today: AIUsagePeriodStats{
+			Scenes: []AIUsageSceneStats{},
+		},
+		Last7Days: AIUsagePeriodStats{
+			Scenes: []AIUsageSceneStats{},
+		},
+		AllTime: AIUsagePeriodStats{
+			Scenes: []AIUsageSceneStats{},
+		},
+		Daily: []AIUsageDayStats{},
+	}
+
+	if len(parsedDays) == 0 {
+		return stats, nil
+	}
+
+	today := time.Now().In(time.Local)
+	todayDate := today.Format("2006-01-02")
+	last7Start := today.AddDate(0, 0, -6).Format("2006-01-02")
+	dailyStart := today.AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+
+	stats.AllTime = buildAIUsagePeriodStats(parsedDays)
+
+	todayDays := make([]storedAIUsageDayStats, 0, 1)
+	last7Days := make([]storedAIUsageDayStats, 0, 7)
+	dailyDays := make([]storedAIUsageDayStats, 0, days)
+	for _, day := range parsedDays {
+		if day.Date == todayDate {
+			todayDays = append(todayDays, day)
+		}
+		if day.Date >= last7Start {
+			last7Days = append(last7Days, day)
+		}
+		if day.Date >= dailyStart {
+			dailyDays = append(dailyDays, day)
+			stats.Daily = append(stats.Daily, toAIUsageDayStats(day))
+		}
+	}
+
+	stats.Today = buildAIUsagePeriodStats(todayDays)
+	stats.Last7Days = buildAIUsagePeriodStats(last7Days)
+
+	return stats, nil
 }
 
 // SetAISettings updates the AI configuration.
@@ -308,8 +462,44 @@ func (s *settingsService) SetAISettings(ctx context.Context, settings *AISetting
 	if s.rateLimiter != nil {
 		s.rateLimiter.SetLimit(rateLimit)
 	}
-	logger.Info("ai settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "analysis_provider", settings.Analysis.Provider, "analysis_model", settings.Analysis.Model, "rate_limit", rateLimit)
+	workerCount := normalizeAIWorkerCount(settings.WorkerCount)
+	if err := s.repo.Set(ctx, keyAIWorkerCount, fmt.Sprintf("%d", workerCount)); err != nil {
+		logger.Warn("ai settings update worker count failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("set worker count: %w", err)
+	}
+	logger.Info("ai settings updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "analysis_provider", settings.Analysis.Provider, "analysis_model", settings.Analysis.Model, "rate_limit", rateLimit, "worker_count", workerCount)
 	return nil
+}
+
+func (s *settingsService) SetAIPromptSettings(ctx context.Context, settings *AIPromptSettings) error {
+	_ = ctx
+	if s.promptMgr == nil {
+		return fmt.Errorf("prompt manager is not configured")
+	}
+
+	templates := make([]ai.EditablePromptTemplate, 0, len(settings.Templates))
+	for _, template := range settings.Templates {
+		templates = append(templates, ai.EditablePromptTemplate{
+			Key:     template.Key,
+			Content: template.Content,
+		})
+	}
+	if err := s.promptMgr.SaveTemplates(templates); err != nil {
+		logger.Warn("ai prompt templates update failed", "module", "service", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return fmt.Errorf("save ai prompt templates: %w", err)
+	}
+	logger.Info("ai prompt templates updated", "module", "service", "action", "update", "resource", "settings", "result", "ok", "count", len(templates), "dir", s.promptMgr.Dir())
+	return nil
+}
+
+func normalizeAIWorkerCount(value int) int {
+	if value <= 0 {
+		return defaultAIStreamWorkers
+	}
+	if value > 16 {
+		return 16
+	}
+	return value
 }
 
 // maskAPIKey returns a masked version of the API key for display.

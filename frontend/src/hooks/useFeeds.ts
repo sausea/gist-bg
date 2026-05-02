@@ -16,6 +16,7 @@ export function useDeleteFeed() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feeds'] })
       queryClient.invalidateQueries({ queryKey: ['unreadCounts'] })
+      queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
     },
   })
 }

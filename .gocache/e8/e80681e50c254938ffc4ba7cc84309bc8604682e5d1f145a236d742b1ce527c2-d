@@ -1,0 +1,12 @@
+./address.go
+./fors.go
+./hypertree.go
+./internal.go
+./keys.go
+./message.go
+./params.go
+./scheme.go
+./slhdsa.go
+./state.go
+./wotsp.go
+./xmss.go

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -26,7 +27,7 @@ import (
 )
 
 // @title Gist API
-// @version 1.0
+// @version 1.0.1
 // @description This is a modern RSS reader API.
 // @BasePath /api
 func main() {
@@ -54,6 +55,8 @@ func main() {
 	aiTranslationRepo := repository.NewAITranslationRepository(dbConn)
 	aiListTranslationRepo := repository.NewAIListTranslationRepository(dbConn)
 	aiAnalysisRepo := repository.NewAIAnalysisRepository(dbConn)
+	aiAnalysisJobRepo := repository.NewAIAnalysisJobRepository(dbConn)
+	entryFocusTagRepo := repository.NewEntryFocusTagRepository(dbConn)
 	domainRateLimitRepo := repository.NewDomainRateLimitRepository(dbConn)
 
 	// Initialize rate limiter with stored setting
@@ -65,9 +68,26 @@ func main() {
 			initialRateLimit = val
 		}
 	}
+	initialAIWorkerCount := 2
+	if setting, err := settingsRepo.Get(context.Background(), "ai.worker_count"); err == nil && setting != nil {
+		var val int
+		fmt.Sscanf(setting.Value, "%d", &val)
+		if val > 0 {
+			initialAIWorkerCount = val
+		}
+	}
 	rateLimiter := ai.NewRateLimiter(initialRateLimit)
 
-	settingsService := service.NewSettingsService(settingsRepo, rateLimiter)
+	promptManager := ai.NewPromptManager(cfg.PromptsDir)
+	if err := promptManager.EnsureDefaults(); err != nil {
+		logger.Error("ensure ai prompts", "dir", cfg.PromptsDir, "error", err)
+		os.Exit(1)
+	}
+	settingsService := service.NewSettingsService(
+		settingsRepo,
+		rateLimiter,
+		service.WithSettingsPromptManager(promptManager),
+	)
 
 	// Initialize client factory for proxy and IP stack support
 	clientFactory := network.NewClientFactory(settingsService, settingsService)
@@ -91,7 +111,12 @@ func main() {
 
 	folderService := service.NewFolderService(folderRepo, feedRepo)
 	feedService := service.NewFeedService(feedRepo, folderRepo, entryRepo, iconService, settingsService, clientFactory, anubisSolver)
-	entryService := service.NewEntryService(entryRepo, feedRepo, folderRepo)
+	entryService := service.NewEntryService(
+		entryRepo,
+		feedRepo,
+		folderRepo,
+		service.WithEntryFocusTags(entryFocusTagRepo),
+	)
 	entryExportService := service.NewEntryExportService(cfg.ExportDir, entryRepo, feedRepo)
 	readabilityService := service.NewReadabilityService(entryRepo, clientFactory, anubisSolver)
 	domainRateLimitService := service.NewDomainRateLimitService(domainRateLimitRepo)
@@ -106,11 +131,21 @@ func main() {
 		aiAnalysisRepo,
 		settingsRepo,
 		rateLimiter,
-		service.WithAIAnalysisArchive("/Users/usr/gist-data", entryRepo, feedRepo, folderRepo),
+		service.WithAIPromptManager(promptManager),
+		service.WithAIEntryFocusTags(entryFocusTagRepo),
+		service.WithAIAnalysisArchive(filepath.Join(cfg.DataDir, "ai-archive"), entryRepo, feedRepo, folderRepo),
 	)
-	aiStreamProcessor := service.NewAIStreamProcessor(entryRepo, settingsRepo, aiService, 2, 256)
+	aiStreamProcessor := service.NewAIStreamProcessor(entryRepo, aiAnalysisJobRepo, settingsRepo, aiService, initialAIWorkerCount, 256)
 	service.AttachRefreshEntryIngestor(refreshService, aiStreamProcessor)
 	authService := service.NewAuthService(settingsRepo)
+
+	var dailyArchiveScheduler *scheduler.AIDailyArchiveScheduler
+	if publisher, ok := aiService.(interface {
+		PublishDailyArchiveReport(context.Context, time.Time) error
+	}); ok {
+		dailyArchiveScheduler = scheduler.NewAIDailyArchiveScheduler(publisher, 21, 0)
+		dailyArchiveScheduler.Start()
+	}
 
 	folderHandler := handler.NewFolderHandler(folderService)
 	feedHandler := handler.NewFeedHandler(feedService, refreshService)
@@ -144,6 +179,9 @@ func main() {
 		defer cancel()
 
 		sched.Stop()
+		if dailyArchiveScheduler != nil {
+			dailyArchiveScheduler.Stop()
+		}
 		aiStreamProcessor.Close()
 		readabilityService.Close()
 		proxyService.Close()

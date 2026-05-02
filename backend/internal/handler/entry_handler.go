@@ -30,14 +30,17 @@ func NewEntryHandler(service service.EntryService, readabilityService service.Re
 func (h *EntryHandler) RegisterRoutes(g *echo.Group) {
 	g.GET("/entries", h.List)
 	g.GET("/entries/:id", h.GetByID)
+	g.GET("/entries/:id/focus", h.GetFocus)
 	g.PATCH("/entries/:id/read", h.UpdateReadStatus)
 	g.PATCH("/entries/:id/starred", h.UpdateStarredStatus)
+	g.PUT("/entries/:id/focus", h.UpdateFocus)
 	g.POST("/entries/:id/export-md", h.ExportMarkdown)
 	g.POST("/entries/:id/fetch-readable", h.FetchReadable)
 	g.POST("/entries/mark-read", h.MarkAllAsRead)
 	g.DELETE("/entries/readability-cache", h.ClearReadabilityCache)
 	g.DELETE("/entries/cache", h.ClearEntryCache)
 	g.GET("/unread-counts", h.GetUnreadCounts)
+	g.GET("/feed-ai-stats", h.GetFeedAIStats)
 	g.GET("/starred-count", h.GetStarredCount)
 }
 
@@ -53,6 +56,7 @@ type entryResponse struct {
 	PublishedAt     *string `json:"publishedAt,omitempty"`
 	Read            bool    `json:"read"`
 	Starred         bool    `json:"starred"`
+	HasAnalysis     bool    `json:"hasAnalysis"`
 	CreatedAt       string  `json:"createdAt"`
 	UpdatedAt       string  `json:"updatedAt"`
 }
@@ -83,6 +87,17 @@ type exportMarkdownResponse struct {
 	SavedAt  string `json:"savedAt"`
 }
 
+type entryFocusResponse struct {
+	EntryID string   `json:"entryId"`
+	Focused bool     `json:"focused"`
+	Tags    []string `json:"tags"`
+}
+
+type updateFocusRequest struct {
+	Focused bool     `json:"focused"`
+	Tags    []string `json:"tags"`
+}
+
 type starredCountResponse struct {
 	Count int `json:"count"`
 }
@@ -99,6 +114,16 @@ type markAllReadRequest struct {
 
 type unreadCountsResponse struct {
 	Counts map[string]int `json:"counts"`
+}
+
+type feedAIStatsItemResponse struct {
+	UnreadCount   int `json:"unreadCount"`
+	AnalyzedCount int `json:"analyzedCount"`
+	PendingCount  int `json:"pendingCount"`
+}
+
+type feedAIStatsResponse struct {
+	Stats map[string]feedAIStatsItemResponse `json:"stats"`
 }
 
 // List returns a list of entries.
@@ -222,6 +247,35 @@ func (h *EntryHandler) GetByID(c echo.Context) error {
 
 	logger.Debug("entry fetched", "module", "handler", "action", "fetch", "resource", "entry", "result", "ok", "entry_id", id)
 	return c.JSON(http.StatusOK, toEntryResponse(entry))
+}
+
+// GetFocus returns the focus state and user tags of an entry.
+// @Summary Get entry focus
+// @Description Get whether an entry is marked as focused and its user-defined tags
+// @Tags entries
+// @Produce json
+// @Param id path int true "Entry ID"
+// @Success 200 {object} entryFocusResponse
+// @Failure 400 {object} errorResponse
+// @Failure 404 {object} errorResponse
+// @Router /entries/{id}/focus [get]
+func (h *EntryHandler) GetFocus(c echo.Context) error {
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid id"})
+	}
+
+	focus, err := h.service.GetFocus(c.Request().Context(), id)
+	if err != nil {
+		logger.Error("entry focus fetch failed", "module", "handler", "action", "fetch", "resource", "entry_focus", "result", "failed", "entry_id", id, "error", err)
+		return writeServiceError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, entryFocusResponse{
+		EntryID: idToString(focus.EntryID),
+		Focused: focus.Focused,
+		Tags:    focus.Tags,
+	})
 }
 
 // UpdateReadStatus updates the read status of an entry.
@@ -378,6 +432,32 @@ func (h *EntryHandler) GetUnreadCounts(c echo.Context) error {
 	return c.JSON(http.StatusOK, unreadCountsResponse{Counts: stringCounts})
 }
 
+// GetFeedAIStats returns unread/analyzed/pending stats for all feeds.
+// @Summary Get feed AI stats
+// @Description Get unread, analyzed, and pending AI analysis counts grouped by feed ID
+// @Tags entries
+// @Produce json
+// @Success 200 {object} feedAIStatsResponse
+// @Router /feed-ai-stats [get]
+func (h *EntryHandler) GetFeedAIStats(c echo.Context) error {
+	stats, err := h.service.GetFeedAIStats(c.Request().Context())
+	if err != nil {
+		logger.Error("feed ai stats failed", "module", "handler", "action", "list", "resource", "entry", "result", "failed", "error", err)
+		return writeServiceError(c, err)
+	}
+
+	stringStats := make(map[string]feedAIStatsItemResponse, len(stats))
+	for feedID, stat := range stats {
+		stringStats[strconv.FormatInt(feedID, 10)] = feedAIStatsItemResponse{
+			UnreadCount:   stat.UnreadCount,
+			AnalyzedCount: stat.AnalyzedCount,
+			PendingCount:  stat.PendingCount,
+		}
+	}
+
+	return c.JSON(http.StatusOK, feedAIStatsResponse{Stats: stringStats})
+}
+
 // UpdateStarredStatus updates the starred status of an entry.
 // @Summary Update starred status
 // @Description Mark an entry as starred or unstarred
@@ -408,6 +488,42 @@ func (h *EntryHandler) UpdateStarredStatus(c echo.Context) error {
 
 	logger.Info("entry starred status updated", "module", "handler", "action", "update", "resource", "entry", "result", "ok", "entry_id", id, "starred", req.Starred)
 	return c.NoContent(http.StatusNoContent)
+}
+
+// UpdateFocus updates the focus state and user tags of an entry.
+// @Summary Update entry focus
+// @Description Mark an entry as focused and store user-defined tags for AI daily report emphasis
+// @Tags entries
+// @Accept json
+// @Produce json
+// @Param id path int true "Entry ID"
+// @Param focus body updateFocusRequest true "Focus state and tags"
+// @Success 200 {object} entryFocusResponse
+// @Failure 400 {object} errorResponse
+// @Failure 404 {object} errorResponse
+// @Router /entries/{id}/focus [put]
+func (h *EntryHandler) UpdateFocus(c echo.Context) error {
+	id, err := parseIDParam(c, "id")
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid id"})
+	}
+
+	var req updateFocusRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	}
+
+	focus, err := h.service.UpdateFocus(c.Request().Context(), id, req.Focused, req.Tags)
+	if err != nil {
+		logger.Error("entry focus update failed", "module", "handler", "action", "update", "resource", "entry_focus", "result", "failed", "entry_id", id, "error", err)
+		return writeServiceError(c, err)
+	}
+
+	return c.JSON(http.StatusOK, entryFocusResponse{
+		EntryID: idToString(focus.EntryID),
+		Focused: focus.Focused,
+		Tags:    focus.Tags,
+	})
 }
 
 // ExportMarkdown saves the entry content with tags to a daily markdown file.
@@ -519,6 +635,7 @@ func toEntryResponse(e model.Entry) entryResponse {
 		Author:          e.Author,
 		Read:            e.Read,
 		Starred:         e.Starred,
+		HasAnalysis:     e.HasAnalysis,
 		CreatedAt:       e.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:       e.UpdatedAt.UTC().Format(time.RFC3339),
 	}

@@ -1,6 +1,8 @@
 package ai_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -73,6 +75,42 @@ func TestGetTranslateTextPrompt_HasInputFormat(t *testing.T) {
 func TestGetTranslateTextPrompt_UnknownLanguage(t *testing.T) {
 	prompt := ai.GetTranslateTextPrompt("summary", "xx-XX")
 	require.Contains(t, prompt, "<target_language>xx-XX</target_language>")
+}
+
+func TestPromptManager_EnsureDefaults(t *testing.T) {
+	dir := t.TempDir()
+	manager := ai.NewPromptManager(dir)
+
+	require.NoError(t, manager.EnsureDefaults())
+
+	require.FileExists(t, filepath.Join(dir, "summary.tmpl"))
+	require.FileExists(t, filepath.Join(dir, "translate_block.tmpl"))
+	require.FileExists(t, filepath.Join(dir, "translate_text.tmpl"))
+	require.FileExists(t, filepath.Join(dir, "analysis.tmpl"))
+	require.FileExists(t, filepath.Join(dir, "daily_report.tmpl"))
+	require.FileExists(t, filepath.Join(dir, "coordinate_lookup.tmpl"))
+}
+
+func TestPromptManager_UsesCustomPromptFile(t *testing.T) {
+	dir := t.TempDir()
+	manager := ai.NewPromptManager(dir)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "analysis.tmpl"), []byte(`custom {{ .TargetLanguage }} {{ .ArticleTitle }}`), 0o644))
+
+	prompt := manager.ArticleAnalysisPrompt("Title", "zh-CN")
+	require.Equal(t, "custom 简体中文 Title", prompt)
+}
+
+func TestPromptManager_FallsBackOnInvalidTemplate(t *testing.T) {
+	dir := t.TempDir()
+	manager := ai.NewPromptManager(dir)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "summary.tmpl"), []byte(`{{ if }}`), 0o644))
+
+	prompt := manager.SummarizePrompt("Title", "en-US")
+	require.Contains(t, prompt, "<article_title>Title</article_title>")
+	require.Contains(t, prompt, "<target_language>English</target_language>")
+	require.Contains(t, prompt, "PROMPT INJECTION WARNING")
 }
 
 func TestOpenAIProvider_IsReasoningModel(t *testing.T) {

@@ -3,13 +3,16 @@ import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tansta
 import {
   listEntries,
   getEntry,
+  getEntryFocus,
   updateEntryReadStatus,
+  updateEntryFocus,
   updateEntryStarred,
   markAllAsRead,
+  getFeedAIStats,
   getUnreadCounts,
   getStarredCount,
 } from '@/api'
-import type { Entry, EntryListParams, MarkAllReadParams } from '@/types/api'
+import type { Entry, EntryFocus, EntryListParams, MarkAllReadParams } from '@/types/api'
 
 function entriesQueryKey(params: EntryListParams) {
   return ['entries', params] as const
@@ -38,10 +41,27 @@ export function useEntry(id: string | null) {
   })
 }
 
+export function useEntryFocus(id: string | null) {
+  return useQuery({
+    queryKey: ['entryFocus', id],
+    queryFn: () => getEntryFocus(id!),
+    enabled: id !== null,
+  })
+}
+
 export function useUnreadCounts() {
   return useQuery({
     queryKey: ['unreadCounts'],
     queryFn: getUnreadCounts,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+}
+
+export function useFeedAIStats() {
+  return useQuery({
+    queryKey: ['feedAIStats'],
+    queryFn: getFeedAIStats,
     staleTime: 30_000,
     refetchInterval: 60_000,
   })
@@ -102,6 +122,7 @@ export function useMarkAsRead() {
     onSuccess: (_, { skipInvalidate }) => {
       // Always update unread counts immediately
       queryClient.invalidateQueries({ queryKey: ['unreadCounts'] })
+      queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
       // Only invalidate entries if not skipped (e.g., not in lightbox/detail view)
       if (!skipInvalidate) {
         queryClient.invalidateQueries({ queryKey: ['entries'] })
@@ -160,6 +181,7 @@ export function useMarkAllAsRead() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['entries'] })
       queryClient.invalidateQueries({ queryKey: ['unreadCounts'] })
+      queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
     },
   })
 }
@@ -184,8 +206,47 @@ export function useMarkAsStarred() {
         if (!old) return old
         return { ...old, starred }
       })
+      queryClient.setQueryData(['entryFocus', id], (old: EntryFocus | undefined) => {
+        if (!old) {
+          return { entryId: id, focused: starred, tags: [] }
+        }
+        return {
+          ...old,
+          focused: starred,
+          tags: starred ? old.tags : [],
+        }
+      })
       queryClient.invalidateQueries({ queryKey: ['starredCount'] })
       queryClient.invalidateQueries({ queryKey: ['entries'] })
+      queryClient.invalidateQueries({ queryKey: ['storedAIAnalyses'] })
+      queryClient.invalidateQueries({ queryKey: ['aiDailyReport'] })
+    },
+  })
+}
+
+export function useUpdateEntryFocus() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      focused,
+      tags,
+    }: {
+      id: string
+      focused: boolean
+      tags: string[]
+    }) => updateEntryFocus(id, focused, tags),
+    onSuccess: (focus, { id }) => {
+      queryClient.setQueryData(['entryFocus', id], focus)
+      queryClient.setQueryData(['entry', id], (old: Entry | undefined) => {
+        if (!old) return old
+        return { ...old, starred: focus.focused }
+      })
+      queryClient.invalidateQueries({ queryKey: ['starredCount'] })
+      queryClient.invalidateQueries({ queryKey: ['entries'] })
+      queryClient.invalidateQueries({ queryKey: ['storedAIAnalyses'] })
+      queryClient.invalidateQueries({ queryKey: ['aiDailyReport'] })
     },
   })
 }

@@ -27,6 +27,8 @@ type StoredAIAnalysis struct {
 	FeedTitle     string     `json:"feedTitle"`
 	Author        *string    `json:"author,omitempty"`
 	PublishedAt   *time.Time `json:"publishedAt,omitempty"`
+	Focused       bool       `json:"focused"`
+	FocusTags     []string   `json:"focusTags,omitempty"`
 	IsReadability bool       `json:"isReadability"`
 	Language      string     `json:"language"`
 	Tag           string     `json:"tag"`
@@ -42,11 +44,14 @@ type StoredAIAnalysis struct {
 type AIDailyReport struct {
 	Date         string                    `json:"date"`
 	Total        int                       `json:"total"`
+	FocusedTotal int                       `json:"focusedTotal"`
 	Sentiment    AIDailyReportSentiment    `json:"sentiment"`
 	TopAnalyses  []StoredAIAnalysis        `json:"topAnalyses"`
 	TopTags      []AIDailyReportCountItem  `json:"topTags"`
 	TopEntities  []AIDailyReportCountItem  `json:"topEntities"`
 	TopFeeds     []AIDailyReportFeedMetric `json:"topFeeds"`
+	FocusedTags  []AIDailyReportCountItem  `json:"focusedTags"`
+	FocusedItems []StoredAIAnalysis        `json:"focusedItems"`
 	Overview     string                    `json:"overview,omitempty"`
 	RiskReview   string                    `json:"riskReview,omitempty"`
 	TrendOutlook string                    `json:"trendOutlook,omitempty"`

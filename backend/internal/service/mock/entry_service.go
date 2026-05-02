@@ -87,6 +87,36 @@ func (mr *MockEntryServiceMockRecorder) GetByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByID", reflect.TypeOf((*MockEntryService)(nil).GetByID), ctx, id)
 }
 
+// GetFocus mocks base method.
+func (m *MockEntryService) GetFocus(ctx context.Context, id int64) (model.EntryFocus, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFocus", ctx, id)
+	ret0, _ := ret[0].(model.EntryFocus)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFocus indicates an expected call of GetFocus.
+func (mr *MockEntryServiceMockRecorder) GetFocus(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFocus", reflect.TypeOf((*MockEntryService)(nil).GetFocus), ctx, id)
+}
+
+// GetFeedAIStats mocks base method.
+func (m *MockEntryService) GetFeedAIStats(ctx context.Context) (map[int64]service.FeedAIStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFeedAIStats", ctx)
+	ret0, _ := ret[0].(map[int64]service.FeedAIStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFeedAIStats indicates an expected call of GetFeedAIStats.
+func (mr *MockEntryServiceMockRecorder) GetFeedAIStats(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFeedAIStats", reflect.TypeOf((*MockEntryService)(nil).GetFeedAIStats), ctx)
+}
+
 // GetStarredCount mocks base method.
 func (m *MockEntryService) GetStarredCount(ctx context.Context) (int, error) {
 	m.ctrl.T.Helper()
@@ -172,4 +202,19 @@ func (m *MockEntryService) MarkAsStarred(ctx context.Context, id int64, starred 
 func (mr *MockEntryServiceMockRecorder) MarkAsStarred(ctx, id, starred any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkAsStarred", reflect.TypeOf((*MockEntryService)(nil).MarkAsStarred), ctx, id, starred)
+}
+
+// UpdateFocus mocks base method.
+func (m *MockEntryService) UpdateFocus(ctx context.Context, id int64, focused bool, tags []string) (model.EntryFocus, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateFocus", ctx, id, focused, tags)
+	ret0, _ := ret[0].(model.EntryFocus)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateFocus indicates an expected call of UpdateFocus.
+func (mr *MockEntryServiceMockRecorder) UpdateFocus(ctx, id, focused, tags any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateFocus", reflect.TypeOf((*MockEntryService)(nil).UpdateFocus), ctx, id, focused, tags)
 }

@@ -554,6 +554,56 @@ func TestEntryService_GetUnreadCounts_Error(t *testing.T) {
 	require.ErrorIs(t, err, dbErr)
 }
 
+func TestEntryService_GetFeedAIStats_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEntries := mock.NewMockEntryRepository(ctrl)
+	mockFeeds := mock.NewMockFeedRepository(ctrl)
+	mockFolders := mock.NewMockFolderRepository(ctrl)
+	svc := service.NewEntryService(mockEntries, mockFeeds, mockFolders)
+	ctx := context.Background()
+
+	expectedStats := []repository.FeedAIStat{
+		{FeedID: 1, UnreadCount: 5, AnalyzedCount: 3},
+		{FeedID: 2, UnreadCount: 10, AnalyzedCount: 10},
+	}
+
+	mockEntries.EXPECT().
+		GetFeedAIStats(ctx).
+		Return(expectedStats, nil)
+
+	stats, err := svc.GetFeedAIStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+	require.Equal(t, 5, stats[1].UnreadCount)
+	require.Equal(t, 3, stats[1].AnalyzedCount)
+	require.Equal(t, 2, stats[1].PendingCount)
+	require.Equal(t, 10, stats[2].UnreadCount)
+	require.Equal(t, 10, stats[2].AnalyzedCount)
+	require.Equal(t, 0, stats[2].PendingCount)
+}
+
+func TestEntryService_GetFeedAIStats_Error(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEntries := mock.NewMockEntryRepository(ctrl)
+	mockFeeds := mock.NewMockFeedRepository(ctrl)
+	mockFolders := mock.NewMockFolderRepository(ctrl)
+	svc := service.NewEntryService(mockEntries, mockFeeds, mockFolders)
+	ctx := context.Background()
+
+	dbErr := errors.New("feed ai stats error")
+
+	mockEntries.EXPECT().
+		GetFeedAIStats(ctx).
+		Return(nil, dbErr)
+
+	_, err := svc.GetFeedAIStats(ctx)
+	require.ErrorIs(t, err, dbErr)
+}
+
 func TestEntryService_GetStarredCount_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

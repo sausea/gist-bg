@@ -17,6 +17,7 @@ export function useDeleteFolder() {
       queryClient.invalidateQueries({ queryKey: ['folders'] })
       queryClient.invalidateQueries({ queryKey: ['feeds'] })
       queryClient.invalidateQueries({ queryKey: ['unreadCounts'] })
+      queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
     },
   })
 }

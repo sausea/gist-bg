@@ -131,6 +131,21 @@ func (mr *MockEntryRepositoryMockRecorder) GetAllUnreadCounts(ctx any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllUnreadCounts", reflect.TypeOf((*MockEntryRepository)(nil).GetAllUnreadCounts), ctx)
 }
 
+// GetFeedAIStats mocks base method.
+func (m *MockEntryRepository) GetFeedAIStats(ctx context.Context) ([]repository.FeedAIStat, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFeedAIStats", ctx)
+	ret0, _ := ret[0].([]repository.FeedAIStat)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFeedAIStats indicates an expected call of GetFeedAIStats.
+func (mr *MockEntryRepositoryMockRecorder) GetFeedAIStats(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFeedAIStats", reflect.TypeOf((*MockEntryRepository)(nil).GetFeedAIStats), ctx)
+}
+
 // GetByID mocks base method.
 func (m *MockEntryRepository) GetByID(ctx context.Context, id int64) (model.Entry, error) {
 	m.ctrl.T.Helper()

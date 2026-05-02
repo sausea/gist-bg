@@ -92,6 +92,7 @@ func (r *aiAnalysisRepository) Get(ctx context.Context, entryID int64, isReadabi
 func (r *aiAnalysisRepository) List(ctx context.Context, limit, offset int) ([]model.StoredAIAnalysis, error) {
 	query := `SELECT
 		a.id, a.entry_id, e.feed_id, f.type, COALESCE(NULLIF(lt.title, ''), e.title), e.url, f.title, e.author, e.published_at,
+		e.starred,
 		a.is_readability, a.language, a.tag, a.summary, a.entities, a.sentiment, a.importance,
 		a.latitude, a.longitude, a.created_at
 	FROM ai_analyses a
@@ -124,6 +125,7 @@ func (r *aiAnalysisRepository) ListByCreatedRange(ctx context.Context, start, en
 		ctx,
 		`SELECT
 			a.id, a.entry_id, e.feed_id, f.type, COALESCE(NULLIF(lt.title, ''), e.title), e.url, f.title, e.author, e.published_at,
+			e.starred,
 			a.is_readability, a.language, a.tag, a.summary, a.entities, a.sentiment, a.importance,
 			a.latitude, a.longitude, a.created_at
 		FROM ai_analyses a
@@ -151,7 +153,7 @@ func scanStoredAIAnalyses(rows *sql.Rows) ([]model.StoredAIAnalysis, error) {
 		var entitiesJSON string
 		var publishedAt sql.NullString
 		var createdAt string
-		var isReadabilityDB int
+		var isReadabilityDB, focusedDB int
 		var latitude sql.NullFloat64
 		var longitude sql.NullFloat64
 
@@ -165,6 +167,7 @@ func scanStoredAIAnalyses(rows *sql.Rows) ([]model.StoredAIAnalysis, error) {
 			&item.FeedTitle,
 			&item.Author,
 			&publishedAt,
+			&focusedDB,
 			&isReadabilityDB,
 			&item.Language,
 			&item.Tag,
@@ -181,6 +184,7 @@ func scanStoredAIAnalyses(rows *sql.Rows) ([]model.StoredAIAnalysis, error) {
 		}
 
 		item.IsReadability = isReadabilityDB == 1
+		item.Focused = focusedDB == 1
 		item.CreatedAt, _ = parseTime(createdAt)
 		if publishedAt.Valid {
 			item.PublishedAt = parseTimePtr(publishedAt.String)

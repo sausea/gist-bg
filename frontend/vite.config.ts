@@ -50,6 +50,9 @@ export default defineConfig({
       workbox: {
         // Only precache essential files, not all JS chunks (shiki has 300+ language files)
         globPatterns: ['index.html', 'manifest.webmanifest', 'assets/app-*.js', 'assets/index-*.css', 'assets/*-vendor-*.js', '*.png', '*.svg'],
+        // The main app bundle can exceed Workbox's default 2 MiB limit after bundling
+        // syntax highlighting and reader features. Keep it in precache for app-shell startup.
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api/],
         cleanupOutdatedCaches: true,

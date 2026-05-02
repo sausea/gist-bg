@@ -1,0 +1,18 @@
+# test log
+getenv OPENAI_BASE_URL
+getenv OPENAI_API_KEY
+getenv OPENAI_ORG_ID
+getenv OPENAI_PROJECT_ID
+getenv OPENAI_WEBHOOK_SECRET
+getenv HTTP_PROXY
+getenv http_proxy
+getenv HTTPS_PROXY
+getenv https_proxy
+getenv NO_PROXY
+getenv no_proxy
+getenv REQUEST_METHOD
+getenv OPENAI_BASE_URL
+getenv OPENAI_API_KEY
+getenv OPENAI_ORG_ID
+getenv OPENAI_PROJECT_ID
+getenv OPENAI_WEBHOOK_SECRET

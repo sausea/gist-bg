@@ -2,8 +2,12 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"gist/backend/internal/service"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"gist/backend/internal/service/ai"
 
@@ -22,6 +26,7 @@ func TestSettingsService_GetAISettings_Defaults(t *testing.T) {
 	require.Equal(t, "zh-CN", settings.SummaryLanguage)
 	require.False(t, settings.AutoAnalysis)
 	require.Equal(t, ai.DefaultRateLimit, settings.RateLimit)
+	require.Equal(t, 2, settings.WorkerCount)
 }
 
 func TestSettingsService_GetAISettings_MaskedKey(t *testing.T) {
@@ -38,6 +43,7 @@ func TestSettingsService_GetAISettings_MaskedKey(t *testing.T) {
 	repo.data[service.KeyAIAutoSummary] = "true"
 	repo.data[service.KeyAIAutoAnalysis] = "true"
 	repo.data[service.KeyAIRateLimit] = "5"
+	repo.data[service.KeyAIWorkerCount] = "4"
 
 	svc := service.NewSettingsService(repo, ai.NewRateLimiter(0))
 	settings, err := svc.GetAISettings(context.Background())
@@ -50,6 +56,7 @@ func TestSettingsService_GetAISettings_MaskedKey(t *testing.T) {
 	require.Equal(t, 9000, settings.Analysis.ThinkingBudget)
 	require.True(t, settings.AutoAnalysis)
 	require.Equal(t, 5, settings.RateLimit)
+	require.Equal(t, 4, settings.WorkerCount)
 }
 
 func TestSettingsService_SetAISettings_StoresAndUpdatesLimiter(t *testing.T) {
@@ -82,6 +89,7 @@ func TestSettingsService_SetAISettings_StoresAndUpdatesLimiter(t *testing.T) {
 		AutoTranslate:   true,
 		AutoAnalysis:    true,
 		RateLimit:       20,
+		WorkerCount:     6,
 	}
 
 	err := svc.SetAISettings(context.Background(), settings)
@@ -91,14 +99,108 @@ func TestSettingsService_SetAISettings_StoresAndUpdatesLimiter(t *testing.T) {
 	require.Equal(t, "report-key", repo.data["ai.report.api_key"])
 	require.Equal(t, "true", repo.data[service.KeyAIAutoAnalysis])
 	require.Equal(t, 20, limiter.GetLimit())
+	require.Equal(t, "6", repo.data[service.KeyAIWorkerCount])
 
 	repo.data[service.KeyAIAPIKey] = "sk-existing"
 	settings.Analysis.APIKey = "***"
 	settings.RateLimit = 0
+	settings.WorkerCount = 0
 	err = svc.SetAISettings(context.Background(), settings)
 	require.NoError(t, err)
 	require.Equal(t, "sk-existing", repo.data[service.KeyAIAPIKey])
 	require.Equal(t, ai.DefaultRateLimit, limiter.GetLimit())
+	require.Equal(t, "2", repo.data[service.KeyAIWorkerCount])
+}
+
+func TestSettingsService_GetAIUsageStats(t *testing.T) {
+	repo := newSettingsRepoStub()
+	svc := service.NewSettingsService(repo, ai.NewRateLimiter(0))
+
+	today := time.Now().In(time.Local).Format("2006-01-02")
+	yesterday := time.Now().In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+
+	todayPayload, err := json.Marshal(map[string]any{
+		"date": today,
+		"totals": map[string]any{
+			"requestCount":     3,
+			"promptTokens":     120,
+			"completionTokens": 80,
+			"totalTokens":      200,
+		},
+		"scenes": map[string]any{
+			"analysis": map[string]any{
+				"requestCount":     2,
+				"promptTokens":     90,
+				"completionTokens": 50,
+				"totalTokens":      140,
+			},
+			"translation": map[string]any{
+				"requestCount":     1,
+				"promptTokens":     30,
+				"completionTokens": 30,
+				"totalTokens":      60,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	yesterdayPayload, err := json.Marshal(map[string]any{
+		"date": yesterday,
+		"totals": map[string]any{
+			"requestCount":     1,
+			"promptTokens":     40,
+			"completionTokens": 20,
+			"totalTokens":      60,
+		},
+		"scenes": map[string]any{
+			"report": map[string]any{
+				"requestCount":     1,
+				"promptTokens":     40,
+				"completionTokens": 20,
+				"totalTokens":      60,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	repo.data["stats.ai_usage.daily."+today] = string(todayPayload)
+	repo.data["stats.ai_usage.daily."+yesterday] = string(yesterdayPayload)
+
+	stats, err := svc.GetAIUsageStats(context.Background(), 30)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.Today.RequestCount)
+	require.Equal(t, 200, stats.Today.TotalTokens)
+	require.Equal(t, 4, stats.Last7Days.RequestCount)
+	require.Equal(t, 260, stats.AllTime.TotalTokens)
+	require.Len(t, stats.Daily, 2)
+	require.Equal(t, today, stats.Daily[0].Date)
+	require.Equal(t, "analysis", stats.Daily[0].Scenes[0].Scene)
+}
+
+func TestSettingsService_AIPromptSettings(t *testing.T) {
+	repo := newSettingsRepoStub()
+	dir := t.TempDir()
+	manager := ai.NewPromptManager(dir)
+	svc := service.NewSettingsService(repo, ai.NewRateLimiter(0), service.WithSettingsPromptManager(manager))
+
+	settings, err := svc.GetAIPromptSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, dir, settings.Dir)
+	require.NotEmpty(t, settings.Templates)
+
+	err = svc.SetAIPromptSettings(context.Background(), &service.AIPromptSettings{
+		Templates: []service.AIPromptTemplate{
+			{
+				Key:     "analysis",
+				Content: "custom {{ .TargetLanguage }} {{ .ArticleTitle }}",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, "analysis.tmpl"))
+	require.NoError(t, err)
+	require.Equal(t, "custom {{ .TargetLanguage }} {{ .ArticleTitle }}", string(data))
 }
 
 func TestSettingsService_GeneralSettings(t *testing.T) {

@@ -38,7 +38,7 @@ import {
   useUpdateFeed,
   useUpdateFeedType,
 } from "@/hooks/useFeeds";
-import { useMarkAllAsRead, useUnreadCounts } from "@/hooks/useEntries";
+import { useFeedAIStats, useMarkAllAsRead, useUnreadCounts } from "@/hooks/useEntries";
 import { useAuth } from "@/hooks/useAuth";
 import type { SelectionType } from "@/hooks/useSelection";
 import type { Folder, Feed, ContentType } from "@/types/api";
@@ -161,6 +161,7 @@ export function Sidebar({
   );
 
   const { data: unreadCountsData } = useUnreadCounts();
+  const { data: feedAIStatsData } = useFeedAIStats();
 
   // Handlers for menu actions
   const handleEditFeed = useCallback(
@@ -235,6 +236,15 @@ export function Sidebar({
     }
     return map;
   }, [unreadCountsData]);
+
+  const feedAIStats = useMemo(() => {
+    if (!feedAIStatsData) return new Map<string, { unreadCount: number; analyzedCount: number; pendingCount: number }>();
+    const map = new Map<string, { unreadCount: number; analyzedCount: number; pendingCount: number }>();
+    for (const [key, value] of Object.entries(feedAIStatsData.stats)) {
+      map.set(key, value);
+    }
+    return map;
+  }, [feedAIStatsData]);
 
   // Calculate unread count for each content type
   const contentTypeCounts = useMemo(() => {
@@ -424,6 +434,7 @@ export function Sidebar({
                           name={feed.title}
                           iconPath={feed.iconPath}
                           unreadCount={unreadCounts.get(feed.id) || 0}
+                          aiStat={feedAIStats.get(feed.id)}
                           isActive={isFeedSelected(feed.id)}
                           errorMessage={feed.errorMessage}
                           onClick={() => onSelectFeed(feed.id)}
@@ -447,6 +458,7 @@ export function Sidebar({
                     name={feed.title}
                     iconPath={feed.iconPath}
                     unreadCount={unreadCounts.get(feed.id) || 0}
+                    aiStat={feedAIStats.get(feed.id)}
                     isActive={isFeedSelected(feed.id)}
                     errorMessage={feed.errorMessage}
                     onClick={() => onSelectFeed(feed.id)}

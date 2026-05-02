@@ -1,11 +1,11 @@
 import { useEffect, useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { exportEntryMarkdown } from "@/api";
 import {
   useEntry,
+  useEntryFocus,
   useMarkAsRead,
-  useMarkAsStarred,
   useRemoveFromUnreadList,
+  useUpdateEntryFocus,
 } from "@/hooks/useEntries";
 import { useAISettings } from "@/hooks/useAISettings";
 import { useGeneralSettings } from "@/hooks/useGeneralSettings";
@@ -21,6 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { EntryContentHeader } from "./EntryContentHeader";
 import { EntryContentBody } from "./EntryContentBody";
@@ -31,13 +32,24 @@ interface EntryContentProps {
   onBack?: () => void;
 }
 
+function normalizeFocusTags(tags: string[]) {
+  return Array.from(
+    new Set(
+      tags
+        .map((tag) => tag.trim().replace(/\s+/g, " "))
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+}
+
 export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
   const { t } = useTranslation();
   const { data: entry, isLoading } = useEntry(entryId);
+  const { data: focusData } = useEntryFocus(entryId);
   const { data: aiSettings } = useAISettings();
   const { data: generalSettings } = useGeneralSettings();
   const { mutate: markAsRead } = useMarkAsRead();
-  const { mutate: markAsStarred } = useMarkAsStarred();
+  const { mutateAsync: updateFocus } = useUpdateEntryFocus();
   const removeFromUnreadList = useRemoveFromUnreadList();
   const { scrollRef, isAtTop, scrollNode } = useEntryContentScroll(entryId);
 
@@ -52,15 +64,12 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
   const autoReadability = generalSettings?.autoReadability ?? false;
   const autoAnalysis = aiSettings?.autoAnalysis ?? false;
 
-  const [exportOpen, setExportOpen] = useState(false);
-  const [exportTags, setExportTags] = useState("");
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
-
-  useEffect(() => {
-    setExportTags("");
-    setExportError(null);
-  }, [entry?.id]);
+  const [focusOpen, setFocusOpen] = useState(false);
+  const [focusEnabled, setFocusEnabled] = useState(false);
+  const [focusTags, setFocusTags] = useState<string[]>([]);
+  const [focusTagInput, setFocusTagInput] = useState("");
+  const [focusError, setFocusError] = useState<string | null>(null);
+  const [isSavingFocus, setIsSavingFocus] = useState(false);
 
   // Readability hook
   const {
@@ -74,24 +83,29 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
 
   const [showAnalysis, setShowAnalysis] = useState(autoAnalysis);
 
+  const {
+    data: aiProcessingStatus,
+    isFetched: isAIProcessingStatusFetched,
+  } = useAIProcessingStatus({
+    entryId,
+    enabled: true,
+  });
+  const isBackgroundAIProcessing = !!aiProcessingStatus?.processing;
+
   const { aiAnalysis, isLoadingAnalysis, analysisError, requestAnalysis, cancelAnalysis } =
     useAIAnalysis({
       entry,
       isReadableActive,
       readableContent,
       autoAnalysis,
+      backgroundProcessing: isBackgroundAIProcessing,
+      backgroundStatusChecked: isAIProcessingStatusFetched,
     });
 
   useEffect(() => {
     setShowAnalysis(autoAnalysis);
   }, [entry?.id, autoAnalysis]);
 
-  const { data: aiProcessingStatus } = useAIProcessingStatus({
-    entryId,
-    enabled: true,
-  });
-
-  const isBackgroundAIProcessing = !!aiProcessingStatus?.processing;
   const isBackgroundAnalysisProcessing =
     showAnalysis &&
     isBackgroundAIProcessing &&
@@ -138,57 +152,71 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
     };
   }, [removeFromUnreadList]);
 
-  const handleOpenExport = useCallback(() => {
+  const handleOpenFocus = useCallback(() => {
     if (!entry) return;
-    setExportError(null);
-    setExportOpen(true);
-  }, [entry]);
+    setFocusEnabled(focusData?.focused ?? entry.starred);
+    setFocusTags(normalizeFocusTags(focusData?.tags ?? []));
+    setFocusTagInput("");
+    setFocusError(null);
+    setFocusOpen(true);
+  }, [entry, focusData?.focused, focusData?.tags, entry?.starred]);
 
-  const handleExportClose = useCallback(() => {
-    setExportOpen(false);
-    setExportError(null);
+  const handleFocusClose = useCallback(() => {
+    setFocusOpen(false);
+    setFocusTagInput("");
+    setFocusError(null);
   }, []);
 
-  const handleExportOpenChange = useCallback((open: boolean) => {
-    setExportOpen(open);
+  const handleFocusOpenChange = useCallback((open: boolean) => {
+    setFocusOpen(open);
     if (!open) {
-      setExportError(null);
+      setFocusTagInput("");
+      setFocusError(null);
     }
   }, []);
 
-  const handleExportSubmit = useCallback(
+  const handleAddFocusTag = useCallback(() => {
+    const nextTag = focusTagInput.trim().replace(/\s+/g, " ");
+    if (!nextTag) return;
+    setFocusTags((current) => normalizeFocusTags([...current, nextTag]));
+    setFocusTagInput("");
+  }, [focusTagInput]);
+
+  const handleRemoveFocusTag = useCallback((tagToRemove: string) => {
+    setFocusTags((current) => current.filter((tag) => tag !== tagToRemove));
+  }, []);
+
+  const handleFocusSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!entry || isExporting) return;
+      if (!entry || isSavingFocus) return;
 
-      setIsExporting(true);
-      setExportError(null);
-      const tags = exportTags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean);
+      const finalTags = focusEnabled
+        ? normalizeFocusTags([
+            ...focusTags,
+            focusTagInput.trim().replace(/\s+/g, " "),
+          ])
+        : [];
 
+      setIsSavingFocus(true);
+      setFocusError(null);
       try {
-        await exportEntryMarkdown(entry.id, tags);
-        if (!entry.starred) {
-          markAsStarred({ id: entry.id, starred: true });
-        }
-        setExportTags("");
-        setExportOpen(false);
+        await updateFocus({
+          id: entry.id,
+          focused: focusEnabled,
+          tags: finalTags,
+        });
+        setFocusTags(finalTags);
+        setFocusTagInput("");
+        setFocusOpen(false);
       } catch {
-        setExportError(t("entry.export_failed"));
+        setFocusError(t("entry.focus_save_failed"));
       } finally {
-        setIsExporting(false);
+        setIsSavingFocus(false);
       }
     },
-    [entry, exportTags, isExporting, markAsStarred, t],
+    [entry, focusEnabled, focusTagInput, focusTags, isSavingFocus, t, updateFocus],
   );
-
-  const handleUnstar = useCallback(() => {
-    if (!entry) return;
-    markAsStarred({ id: entry.id, starred: false });
-    setExportOpen(false);
-  }, [entry, markAsStarred]);
 
   const handleToggleAnalysis = useCallback(async () => {
     if (!entry) return;
@@ -245,7 +273,7 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
         isLoading={isReadableLoading}
         error={readableError}
         onToggleReadable={handleToggleReadable}
-        onOpenStarDialog={handleOpenExport}
+        onOpenFocusDialog={handleOpenFocus}
         isLoadingAnalysis={showAnalysis && isLoadingAnalysis}
         hasAnalysis={showAnalysis}
         onToggleAnalysis={handleToggleAnalysis}
@@ -256,50 +284,89 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
         isMobile={isMobile}
         onBack={onBack}
       />
-      <Dialog open={exportOpen} onOpenChange={handleExportOpenChange}>
+      <Dialog open={focusOpen} onOpenChange={handleFocusOpenChange}>
         <DialogContent className="max-w-md p-0">
           <DialogHeader className="border-b border-border px-4 py-3">
-            <DialogTitle>{t("entry.export_title")}</DialogTitle>
+            <DialogTitle>{t("entry.focus_title")}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleExportSubmit} className="space-y-4 p-4">
+          <form onSubmit={handleFocusSubmit} className="space-y-4 p-4">
+            <div className="flex items-start justify-between gap-4 rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-foreground">
+                  {t("entry.focus_enabled_label")}
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t("entry.focus_description")}
+                </p>
+              </div>
+              <Switch checked={focusEnabled} onCheckedChange={setFocusEnabled} />
+            </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t("entry.export_tags_label")}
+                {t("entry.focus_tags_label")}
               </label>
-              <input
-                type="text"
-                value={exportTags}
-                onChange={(e) => setExportTags(e.target.value)}
-                placeholder={t("entry.export_tags_placeholder")}
-                className={cn(
-                  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm",
-                  "focus:outline-none focus:ring-2 focus:ring-primary/50",
-                  "placeholder:text-muted-foreground",
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={focusTagInput}
+                  onChange={(e) => setFocusTagInput(e.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleAddFocusTag();
+                    }
+                  }}
+                  placeholder={t("entry.focus_tags_placeholder")}
+                  className={cn(
+                    "flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm",
+                    "focus:outline-none focus:ring-2 focus:ring-primary/50",
+                    "placeholder:text-muted-foreground",
+                    !focusEnabled && "cursor-not-allowed opacity-60",
+                  )}
+                  autoFocus
+                  disabled={!focusEnabled}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddFocusTag}
+                  disabled={!focusEnabled}
+                  className={cn(
+                    "rounded-md border border-border bg-background px-3 py-2 text-sm font-medium transition-colors",
+                    "hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50",
+                  )}
+                >
+                  {t("entry.focus_add_tag")}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {focusTags.length > 0 ? (
+                  focusTags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleRemoveFocusTag(tag)}
+                      className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                    >
+                      <span>{tag}</span>
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t("entry.focus_tags_empty")}
+                  </p>
                 )}
-                autoFocus
-              />
+              </div>
             </div>
-            {exportError && (
+            {focusError && (
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {exportError}
+                {focusError}
               </div>
             )}
             <div className="flex justify-end gap-2 pt-2">
-              {entry.starred && (
-                <button
-                  type="button"
-                  onClick={handleUnstar}
-                  className={cn(
-                    "rounded-md px-4 py-2 text-sm font-medium transition-colors",
-                    "border border-destructive/40 text-destructive hover:bg-destructive/10",
-                  )}
-                >
-                  {t("entry.remove_from_starred")}
-                </button>
-              )}
               <button
                 type="button"
-                onClick={handleExportClose}
+                onClick={handleFocusClose}
                 className={cn(
                   "rounded-md px-4 py-2 text-sm font-medium transition-colors",
                   "border border-border bg-background hover:bg-muted",
@@ -309,14 +376,14 @@ export function EntryContent({ entryId, isMobile, onBack }: EntryContentProps) {
               </button>
               <button
                 type="submit"
-                disabled={isExporting}
+                disabled={isSavingFocus}
                 className={cn(
                   "rounded-md px-4 py-2 text-sm font-medium transition-colors",
                   "bg-primary text-primary-foreground hover:bg-primary/90",
                   "disabled:cursor-not-allowed disabled:opacity-50",
                 )}
               >
-                {isExporting ? t("entry.exporting") : t("entry.export_save")}
+                {isSavingFocus ? t("entry.focus_saving") : t("entry.focus_save")}
               </button>
             </div>
           </form>

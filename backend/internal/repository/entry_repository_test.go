@@ -47,6 +47,108 @@ func TestEntryRepository_CreateAndGet(t *testing.T) {
 	require.Equal(t, url, *fetched.URL)
 }
 
+func TestEntryRepository_GetFeedAIStats(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	entryRepo := repository.NewEntryRepository(db)
+	analysisRepo := repository.NewAIAnalysisRepository(db)
+	jobRepo := repository.NewAIAnalysisJobRepository(db)
+	ctx := context.Background()
+
+	feedAID := testutil.SeedFeed(t, db, model.Feed{Title: "Feed A", URL: "https://a.example/feed"})
+	feedBID := testutil.SeedFeed(t, db, model.Feed{Title: "Feed B", URL: "https://b.example/feed"})
+
+	titleA1 := "Unread analyzed"
+	urlA1 := "https://a.example/1"
+	entryA1 := testutil.SeedEntry(t, db, model.Entry{FeedID: feedAID, Title: &titleA1, URL: &urlA1, Read: false})
+	titleA2 := "Unread pending"
+	urlA2 := "https://a.example/2"
+	_ = testutil.SeedEntry(t, db, model.Entry{FeedID: feedAID, Title: &titleA2, URL: &urlA2, Read: false})
+	titleA3 := "Read analyzed"
+	urlA3 := "https://a.example/3"
+	entryA3 := testutil.SeedEntry(t, db, model.Entry{FeedID: feedAID, Title: &titleA3, URL: &urlA3, Read: true})
+	titleB1 := "Unread succeeded job"
+	urlB1 := "https://b.example/1"
+	entryB1 := testutil.SeedEntry(t, db, model.Entry{FeedID: feedBID, Title: &titleB1, URL: &urlB1, Read: false})
+	titleB2 := "Unread analyzed readability"
+	urlB2 := "https://b.example/2"
+	entryB2 := testutil.SeedEntry(t, db, model.Entry{FeedID: feedBID, Title: &titleB2, URL: &urlB2, Read: false})
+	titleB3 := "Unread failed"
+	urlB3 := "https://b.example/3"
+	entryB3 := testutil.SeedEntry(t, db, model.Entry{FeedID: feedBID, Title: &titleB3, URL: &urlB3, Read: false})
+
+	require.NoError(t, analysisRepo.Save(ctx, entryA1, false, "zh-CN", model.AIAnalysis{
+		Tag: "#A", Summary: "ok", Entities: []string{"A"}, Sentiment: "neutral", Importance: 1,
+	}))
+	require.NoError(t, analysisRepo.Save(ctx, entryA3, false, "zh-CN", model.AIAnalysis{
+		Tag: "#A", Summary: "read", Entities: []string{"A"}, Sentiment: "neutral", Importance: 1,
+	}))
+	require.NoError(t, jobRepo.UpsertQueued(ctx, entryB1, feedBID, model.AIAnalysisJobSourceAuto, model.AIAnalysisContentModeOriginal, "zh-CN"))
+	require.NoError(t, jobRepo.MarkRunning(ctx, entryB1))
+	require.NoError(t, jobRepo.MarkSucceeded(ctx, entryB1, model.AIAnalysisContentModeOriginal, "zh-CN"))
+	require.NoError(t, analysisRepo.Save(ctx, entryB2, false, "zh-CN", model.AIAnalysis{
+		Tag: "#B", Summary: "base", Entities: []string{"B"}, Sentiment: "neutral", Importance: 1,
+	}))
+	require.NoError(t, analysisRepo.Save(ctx, entryB2, true, "zh-CN", model.AIAnalysis{
+		Tag: "#B", Summary: "readability", Entities: []string{"B"}, Sentiment: "neutral", Importance: 1,
+	}))
+	require.NoError(t, jobRepo.UpsertQueued(ctx, entryB3, feedBID, model.AIAnalysisJobSourceAuto, model.AIAnalysisContentModeOriginal, "zh-CN"))
+	require.NoError(t, jobRepo.MarkRunning(ctx, entryB3))
+	require.NoError(t, jobRepo.MarkFailed(ctx, entryB3, "network error"))
+
+	stats, err := entryRepo.GetFeedAIStats(ctx)
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+
+	statMap := make(map[int64]repository.FeedAIStat, len(stats))
+	for _, stat := range stats {
+		statMap[stat.FeedID] = stat
+	}
+
+	require.Equal(t, 2, statMap[feedAID].UnreadCount)
+	require.Equal(t, 1, statMap[feedAID].AnalyzedCount)
+	require.Equal(t, 3, statMap[feedBID].UnreadCount)
+	require.Equal(t, 2, statMap[feedBID].AnalyzedCount)
+}
+
+func TestEntryRepository_List_IncludesAnalysisStatus(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	entryRepo := repository.NewEntryRepository(db)
+	analysisRepo := repository.NewAIAnalysisRepository(db)
+	jobRepo := repository.NewAIAnalysisJobRepository(db)
+	ctx := context.Background()
+
+	feedID := testutil.SeedFeed(t, db, model.Feed{Title: "Feed", URL: "https://example.com/feed"})
+
+	analyzedID := testutil.SeedEntry(t, db, model.Entry{FeedID: feedID, Title: stringPtr("Analyzed"), Read: false})
+	jobSucceededID := testutil.SeedEntry(t, db, model.Entry{FeedID: feedID, Title: stringPtr("Succeeded"), Read: false})
+	pendingID := testutil.SeedEntry(t, db, model.Entry{FeedID: feedID, Title: stringPtr("Pending"), Read: false})
+
+	require.NoError(t, analysisRepo.Save(ctx, analyzedID, false, "zh-CN", model.AIAnalysis{
+		Tag: "#A", Summary: "done", Entities: []string{"A"}, Sentiment: "neutral", Importance: 1,
+	}))
+	require.NoError(t, jobRepo.UpsertQueued(ctx, jobSucceededID, feedID, model.AIAnalysisJobSourceAuto, model.AIAnalysisContentModeOriginal, "zh-CN"))
+	require.NoError(t, jobRepo.MarkRunning(ctx, jobSucceededID))
+	require.NoError(t, jobRepo.MarkSucceeded(ctx, jobSucceededID, model.AIAnalysisContentModeOriginal, "zh-CN"))
+	require.NoError(t, jobRepo.UpsertQueued(ctx, pendingID, feedID, model.AIAnalysisJobSourceAuto, model.AIAnalysisContentModeOriginal, "zh-CN"))
+
+	entries, err := entryRepo.List(ctx, repository.EntryListFilter{FeedID: &feedID})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+
+	statuses := make(map[int64]bool, len(entries))
+	for _, entry := range entries {
+		statuses[entry.ID] = entry.HasAnalysis
+	}
+
+	require.True(t, statuses[analyzedID])
+	require.True(t, statuses[jobSucceededID])
+	require.False(t, statuses[pendingID])
+
+	fetched, err := entryRepo.GetByID(ctx, analyzedID)
+	require.NoError(t, err)
+	require.True(t, fetched.HasAnalysis)
+}
+
 func TestEntryRepository_CreateOrUpdate_SameHashUpdatesURL(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	repo := repository.NewEntryRepository(db)

@@ -1,0 +1,7 @@
+./anthropic.go
+./compatible.go
+./html_parser.go
+./openai.go
+./prompts.go
+./provider.go
+./rate_limiter.go

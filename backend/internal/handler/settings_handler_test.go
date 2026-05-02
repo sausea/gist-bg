@@ -30,6 +30,7 @@ func TestSettingsHandler_GetAISettings_Success(t *testing.T) {
 			Provider: "openai",
 			Model:    "gpt-4",
 		},
+		WorkerCount: 3,
 	}
 
 	mockService.EXPECT().
@@ -42,6 +43,71 @@ func TestSettingsHandler_GetAISettings_Success(t *testing.T) {
 	var resp handler.AISettingsResponse
 	assertJSONResponse(t, rec, http.StatusOK, &resp)
 	require.Equal(t, "openai", resp.Analysis.Provider)
+	require.Equal(t, 3, resp.WorkerCount)
+}
+
+func TestSettingsHandler_GetAIUsageStats_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockSettingsService(ctrl)
+	h := handler.NewSettingsHandlerHelper(mockService, nil)
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/settings/ai/usage?days=14", nil)
+	c, rec := newTestContext(e, req)
+
+	mockService.EXPECT().
+		GetAIUsageStats(gomock.Any(), 14).
+		Return(&service.AIUsageStats{
+			Today: service.AIUsagePeriodStats{
+				AIUsageCounter: service.AIUsageCounter{
+					RequestCount:     2,
+					PromptTokens:     120,
+					CompletionTokens: 80,
+					TotalTokens:      200,
+				},
+			},
+		}, nil)
+
+	err := h.GetAIUsageStats(c)
+	require.NoError(t, err)
+
+	var resp service.AIUsageStats
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, 2, resp.Today.RequestCount)
+	require.Equal(t, 200, resp.Today.TotalTokens)
+}
+
+func TestSettingsHandler_GetAIPromptSettings_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockSettingsService(ctrl)
+	h := handler.NewSettingsHandlerHelper(mockService, nil)
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/settings/ai/prompts", nil)
+	c, rec := newTestContext(e, req)
+
+	mockService.EXPECT().
+		GetAIPromptSettings(gomock.Any()).
+		Return(&service.AIPromptSettings{
+			Dir: "/app/data/prompts",
+			Templates: []service.AIPromptTemplate{
+				{Key: "analysis", FileName: "analysis.tmpl", Variables: []string{".TargetLanguage"}, Content: "analysis", DefaultContent: "default"},
+			},
+		}, nil)
+
+	err := h.GetAIPromptSettings(c)
+	require.NoError(t, err)
+
+	var resp handler.AIPromptSettingsResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, "/app/data/prompts", resp.Dir)
+	require.Len(t, resp.Templates, 1)
+	require.Equal(t, "analysis", resp.Templates[0].Key)
+	require.Equal(t, "analysis.tmpl", resp.Templates[0].FileName)
 }
 
 func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
@@ -65,6 +131,7 @@ func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
 			"provider": "anthropic",
 			"model":    "claude-sonnet",
 		},
+		"workerCount": 5,
 	}
 	req := newJSONRequest(http.MethodPut, "/settings/ai", reqBody)
 	c, rec := newTestContext(e, req)
@@ -75,11 +142,48 @@ func TestSettingsHandler_UpdateAISettings_Success(t *testing.T) {
 
 	mockService.EXPECT().
 		GetAISettings(gomock.Any()).
-		Return(&service.AISettings{Analysis: service.AIModelSettings{Provider: "openai", Model: "gpt-4"}}, nil)
+		Return(&service.AISettings{Analysis: service.AIModelSettings{Provider: "openai", Model: "gpt-4"}, WorkerCount: 5}, nil)
 
 	err := h.UpdateAISettings(c)
 	require.NoError(t, err)
 
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestSettingsHandler_UpdateAIPromptSettings_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockSettingsService(ctrl)
+	h := handler.NewSettingsHandlerHelper(mockService, nil)
+
+	e := newTestEcho()
+	reqBody := map[string]any{
+		"templates": []map[string]any{
+			{
+				"key":     "analysis",
+				"content": "updated analysis prompt",
+			},
+		},
+	}
+	req := newJSONRequest(http.MethodPut, "/settings/ai/prompts", reqBody)
+	c, rec := newTestContext(e, req)
+
+	mockService.EXPECT().
+		SetAIPromptSettings(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	mockService.EXPECT().
+		GetAIPromptSettings(gomock.Any()).
+		Return(&service.AIPromptSettings{
+			Dir: "/app/data/prompts",
+			Templates: []service.AIPromptTemplate{
+				{Key: "analysis", FileName: "analysis.tmpl", Content: "updated analysis prompt", DefaultContent: "default"},
+			},
+		}, nil)
+
+	err := h.UpdateAIPromptSettings(c)
+	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 

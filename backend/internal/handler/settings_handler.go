@@ -24,6 +24,7 @@ type aiSettingsResponse struct {
 	AutoTranslateTitle bool                   `json:"autoTranslateTitle"`
 	AutoAnalysis       bool                   `json:"autoAnalysis"`
 	RateLimit          int                    `json:"rateLimit"`
+	WorkerCount        int                    `json:"workerCount"`
 }
 
 type aiSettingsRequest struct {
@@ -35,6 +36,24 @@ type aiSettingsRequest struct {
 	AutoTranslateTitle bool                   `json:"autoTranslateTitle"`
 	AutoAnalysis       bool                   `json:"autoAnalysis"`
 	RateLimit          int                    `json:"rateLimit"`
+	WorkerCount        int                    `json:"workerCount"`
+}
+
+type aiPromptTemplatePayload struct {
+	Key            string   `json:"key"`
+	FileName       string   `json:"fileName,omitempty"`
+	Variables      []string `json:"variables,omitempty"`
+	Content        string   `json:"content"`
+	DefaultContent string   `json:"defaultContent,omitempty"`
+}
+
+type aiPromptSettingsResponse struct {
+	Dir       string                    `json:"dir"`
+	Templates []aiPromptTemplatePayload `json:"templates"`
+}
+
+type aiPromptSettingsRequest struct {
+	Templates []aiPromptTemplatePayload `json:"templates"`
 }
 
 type aiModelSettingsPayload struct {
@@ -152,7 +171,10 @@ type deletedCountResponse struct {
 
 func (h *SettingsHandler) RegisterRoutes(g *echo.Group) {
 	g.GET("/settings/ai", h.GetAISettings)
+	g.GET("/settings/ai/usage", h.GetAIUsageStats)
+	g.GET("/settings/ai/prompts", h.GetAIPromptSettings)
 	g.PUT("/settings/ai", h.UpdateAISettings)
+	g.PUT("/settings/ai/prompts", h.UpdateAIPromptSettings)
 	g.POST("/settings/ai/test", h.TestAI)
 	g.GET("/settings/general", h.GetGeneralSettings)
 	g.PUT("/settings/general", h.UpdateGeneralSettings)
@@ -188,6 +210,50 @@ func (h *SettingsHandler) GetAISettings(c echo.Context) error {
 		AutoTranslateTitle: settings.AutoTranslateTitle,
 		AutoAnalysis:       settings.AutoAnalysis,
 		RateLimit:          settings.RateLimit,
+		WorkerCount:        settings.WorkerCount,
+	})
+}
+
+func (h *SettingsHandler) GetAIUsageStats(c echo.Context) error {
+	days := 30
+	if value := c.QueryParam("days"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid days"})
+		}
+		days = parsed
+	}
+
+	stats, err := h.service.GetAIUsageStats(c.Request().Context(), days)
+	if err != nil {
+		logger.Error("ai usage stats get failed", "module", "handler", "action", "list", "resource", "settings", "result", "failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, errorResponse{Error: "failed to get ai usage stats"})
+	}
+
+	return c.JSON(http.StatusOK, stats)
+}
+
+func (h *SettingsHandler) GetAIPromptSettings(c echo.Context) error {
+	settings, err := h.service.GetAIPromptSettings(c.Request().Context())
+	if err != nil {
+		logger.Error("ai prompt settings get failed", "module", "handler", "action", "list", "resource", "settings", "result", "failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, errorResponse{Error: "failed to get ai prompt settings"})
+	}
+
+	templates := make([]aiPromptTemplatePayload, 0, len(settings.Templates))
+	for _, template := range settings.Templates {
+		templates = append(templates, aiPromptTemplatePayload{
+			Key:            template.Key,
+			FileName:       template.FileName,
+			Variables:      append([]string(nil), template.Variables...),
+			Content:        template.Content,
+			DefaultContent: template.DefaultContent,
+		})
+	}
+
+	return c.JSON(http.StatusOK, aiPromptSettingsResponse{
+		Dir:       settings.Dir,
+		Templates: templates,
 	})
 }
 
@@ -230,6 +296,7 @@ func (h *SettingsHandler) UpdateAISettings(c echo.Context) error {
 		AutoTranslateTitle: req.AutoTranslateTitle,
 		AutoAnalysis:       req.AutoAnalysis,
 		RateLimit:          req.RateLimit,
+		WorkerCount:        req.WorkerCount,
 	}
 
 	if err := h.service.SetAISettings(c.Request().Context(), settings); err != nil {
@@ -240,6 +307,31 @@ func (h *SettingsHandler) UpdateAISettings(c echo.Context) error {
 	logger.Info("ai settings updated", "module", "handler", "action", "update", "resource", "settings", "result", "ok", "provider", req.Analysis.Provider)
 	// Return updated settings (with masked keys)
 	return h.GetAISettings(c)
+}
+
+func (h *SettingsHandler) UpdateAIPromptSettings(c echo.Context) error {
+	var req aiPromptSettingsRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	}
+
+	settings := &service.AIPromptSettings{
+		Templates: make([]service.AIPromptTemplate, 0, len(req.Templates)),
+	}
+	for _, template := range req.Templates {
+		settings.Templates = append(settings.Templates, service.AIPromptTemplate{
+			Key:     template.Key,
+			Content: template.Content,
+		})
+	}
+
+	if err := h.service.SetAIPromptSettings(c.Request().Context(), settings); err != nil {
+		logger.Error("ai prompt settings update failed", "module", "handler", "action", "update", "resource", "settings", "result", "failed", "error", err)
+		return c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
+	}
+
+	logger.Info("ai prompt settings updated", "module", "handler", "action", "update", "resource", "settings", "result", "ok", "count", len(req.Templates))
+	return h.GetAIPromptSettings(c)
 }
 
 func normalizeAIModelSettings(req aiModelSettingsPayload) (service.AIModelSettings, error) {

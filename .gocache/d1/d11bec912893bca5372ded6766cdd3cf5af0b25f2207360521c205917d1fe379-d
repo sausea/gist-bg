@@ -1,0 +1,8 @@
+./article.go
+./inspect_node.go
+./parser-check.go
+./parser-parse.go
+./parser.go
+./readability.go
+./traverse.go
+./utils.go

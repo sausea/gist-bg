@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
+	"strings"
 
-	"gist/backend/pkg/logger"
 	"gist/backend/internal/model"
 	"gist/backend/internal/repository"
+	"gist/backend/pkg/logger"
 )
 
 type EntryListParams struct {
@@ -22,13 +24,24 @@ type EntryListParams struct {
 	Offset       int
 }
 
+type FeedAIStats struct {
+	UnreadCount   int `json:"unreadCount"`
+	AnalyzedCount int `json:"analyzedCount"`
+	PendingCount  int `json:"pendingCount"`
+}
+
+type EntryServiceOption func(*entryService)
+
 type EntryService interface {
 	List(ctx context.Context, params EntryListParams) ([]model.Entry, error)
 	GetByID(ctx context.Context, id int64) (model.Entry, error)
+	GetFocus(ctx context.Context, id int64) (model.EntryFocus, error)
 	MarkAsRead(ctx context.Context, id int64, read bool) error
 	MarkAsStarred(ctx context.Context, id int64, starred bool) error
+	UpdateFocus(ctx context.Context, id int64, focused bool, tags []string) (model.EntryFocus, error)
 	MarkAllAsRead(ctx context.Context, feedID *int64, folderID *int64, contentType *string) error
 	GetUnreadCounts(ctx context.Context) (map[int64]int, error)
+	GetFeedAIStats(ctx context.Context) (map[int64]FeedAIStats, error)
 	GetStarredCount(ctx context.Context) (int, error)
 	// ClearReadabilityCache clears all readable_content from entries
 	ClearReadabilityCache(ctx context.Context) (int64, error)
@@ -37,20 +50,34 @@ type EntryService interface {
 }
 
 type entryService struct {
-	entries repository.EntryRepository
-	feeds   repository.FeedRepository
-	folders repository.FolderRepository
+	entries      repository.EntryRepository
+	feeds        repository.FeedRepository
+	folders      repository.FolderRepository
+	focusTagRepo repository.EntryFocusTagRepository
 }
 
 func NewEntryService(
 	entries repository.EntryRepository,
 	feeds repository.FeedRepository,
 	folders repository.FolderRepository,
+	options ...EntryServiceOption,
 ) EntryService {
-	return &entryService{
+	svc := &entryService{
 		entries: entries,
 		feeds:   feeds,
 		folders: folders,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(svc)
+		}
+	}
+	return svc
+}
+
+func WithEntryFocusTags(repo repository.EntryFocusTagRepository) EntryServiceOption {
+	return func(s *entryService) {
+		s.focusTagRepo = repo
 	}
 }
 
@@ -117,6 +144,30 @@ func (s *entryService) GetByID(ctx context.Context, id int64) (model.Entry, erro
 	}
 	logger.Debug("entry get", "module", "service", "action", "fetch", "resource", "entry", "result", "ok", "entry_id", id)
 	return entry, nil
+}
+
+func (s *entryService) GetFocus(ctx context.Context, id int64) (model.EntryFocus, error) {
+	entry, err := s.entries.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.EntryFocus{}, ErrNotFound
+		}
+		return model.EntryFocus{}, err
+	}
+
+	tags := []string{}
+	if s.focusTagRepo != nil {
+		tags, err = s.focusTagRepo.ListByEntryID(ctx, id)
+		if err != nil {
+			return model.EntryFocus{}, err
+		}
+	}
+
+	return model.EntryFocus{
+		EntryID: id,
+		Focused: entry.Starred,
+		Tags:    append([]string{}, tags...),
+	}, nil
 }
 
 func (s *entryService) MarkAsRead(ctx context.Context, id int64, read bool) error {
@@ -196,6 +247,29 @@ func (s *entryService) GetUnreadCounts(ctx context.Context) (map[int64]int, erro
 	return result, nil
 }
 
+func (s *entryService) GetFeedAIStats(ctx context.Context) (map[int64]FeedAIStats, error) {
+	stats, err := s.entries.GetFeedAIStats(ctx)
+	if err != nil {
+		logger.Error("feed ai stats failed", "module", "service", "action", "list", "resource", "entry", "result", "failed", "error", err)
+		return nil, err
+	}
+
+	result := make(map[int64]FeedAIStats, len(stats))
+	for _, stat := range stats {
+		pendingCount := stat.UnreadCount - stat.AnalyzedCount
+		if pendingCount < 0 {
+			pendingCount = 0
+		}
+		result[stat.FeedID] = FeedAIStats{
+			UnreadCount:   stat.UnreadCount,
+			AnalyzedCount: stat.AnalyzedCount,
+			PendingCount:  pendingCount,
+		}
+	}
+
+	return result, nil
+}
+
 func (s *entryService) MarkAsStarred(ctx context.Context, id int64, starred bool) error {
 	// Check entry exists
 	_, err := s.entries.GetByID(ctx, id)
@@ -210,8 +284,38 @@ func (s *entryService) MarkAsStarred(ctx context.Context, id int64, starred bool
 		logger.Error("entry update starred failed", "module", "service", "action", "update", "resource", "entry", "result", "failed", "entry_id", id, "starred", starred, "error", err)
 		return err
 	}
+	if !starred && s.focusTagRepo != nil {
+		if err := s.focusTagRepo.ReplaceByEntryID(ctx, id, nil); err != nil {
+			logger.Error("entry focus tags clear failed", "module", "service", "action", "update", "resource", "entry_focus", "result", "failed", "entry_id", id, "error", err)
+			return err
+		}
+	}
 	logger.Info("entry starred updated", "module", "service", "action", "update", "resource", "entry", "result", "ok", "entry_id", id, "starred", starred)
 	return nil
+}
+
+func (s *entryService) UpdateFocus(ctx context.Context, id int64, focused bool, tags []string) (model.EntryFocus, error) {
+	normalizedTags := normalizeEntryFocusTags(tags)
+	if !focused {
+		normalizedTags = []string{}
+	}
+
+	if err := s.MarkAsStarred(ctx, id, focused); err != nil {
+		return model.EntryFocus{}, err
+	}
+
+	if s.focusTagRepo != nil {
+		if err := s.focusTagRepo.ReplaceByEntryID(ctx, id, normalizedTags); err != nil {
+			logger.Error("entry focus tags update failed", "module", "service", "action", "update", "resource", "entry_focus", "result", "failed", "entry_id", id, "error", err)
+			return model.EntryFocus{}, err
+		}
+	}
+
+	return model.EntryFocus{
+		EntryID: id,
+		Focused: focused,
+		Tags:    append([]string{}, normalizedTags...),
+	}, nil
 }
 
 func (s *entryService) GetStarredCount(ctx context.Context) (int, error) {
@@ -247,4 +351,23 @@ func (s *entryService) ClearEntryCache(ctx context.Context) (int64, error) {
 	}
 	logger.Info("entry cache cleared", "module", "service", "action", "clear", "resource", "entry", "result", "ok", "count", deleted)
 	return deleted, nil
+}
+
+func normalizeEntryFocusTags(tags []string) []string {
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, raw := range tags {
+		tag := strings.TrimSpace(raw)
+		if tag == "" {
+			continue
+		}
+		tag = strings.Join(strings.Fields(tag), " ")
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
 }

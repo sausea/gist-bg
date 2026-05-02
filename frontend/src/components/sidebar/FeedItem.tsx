@@ -18,13 +18,14 @@ import {
 import { RssIcon, ErrorIcon } from '@/components/ui/icons'
 import { useContextMenu } from '@/hooks/useContextMenu'
 import { feedItemStyles, sidebarItemIconStyles } from './styles'
-import type { ContentType, Folder } from '@/types/api'
+import type { ContentType, FeedAIStat, Folder } from '@/types/api'
 
 interface FeedItemProps {
   name: string
   feedId: string
   iconPath?: string
   unreadCount?: number
+  aiStat?: FeedAIStat
   isActive?: boolean
   errorMessage?: string
   onClick?: () => void
@@ -43,6 +44,7 @@ export function FeedItem({
   feedId,
   iconPath,
   unreadCount,
+  aiStat,
   isActive = false,
   errorMessage,
   onClick,
@@ -59,6 +61,12 @@ export function FeedItem({
   const [iconError, setIconError] = useState(false)
   const hasError = !!errorMessage
   const triggerRef = useRef<HTMLSpanElement>(null)
+  const statsLabel = aiStat
+    ? `${t('sidebar.unread_short')}${aiStat.unreadCount} ${t('sidebar.analyzed_short')}${aiStat.analyzedCount} ${t('sidebar.pending_short')}${aiStat.pendingCount}`
+    : null
+  const statsTitle = aiStat
+    ? `${t('sidebar.unread_full')}: ${aiStat.unreadCount} / ${t('sidebar.analyzed_full')}: ${aiStat.analyzedCount} / ${t('sidebar.pending_full')}: ${aiStat.pendingCount}`
+    : null
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent | { pageX: number; pageY: number }) => {
@@ -114,11 +122,18 @@ export function FeedItem({
               </Tooltip>
             )}
           </div>
-          {unreadCount !== undefined && unreadCount > 0 && (
+          {statsLabel ? (
+            <span
+              className="ml-2 shrink-0 text-[0.62rem] tabular-nums text-muted-foreground"
+              title={statsTitle ?? undefined}
+            >
+              {statsLabel}
+            </span>
+          ) : unreadCount !== undefined && unreadCount > 0 ? (
             <span className="shrink-0 text-[0.65rem] tabular-nums text-muted-foreground">
               {unreadCount}
             </span>
-          )}
+          ) : null}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

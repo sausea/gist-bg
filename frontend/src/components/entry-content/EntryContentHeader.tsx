@@ -13,7 +13,7 @@ interface EntryContentHeaderProps {
   isLoading: boolean
   error: string | null
   onToggleReadable: () => void
-  onOpenStarDialog: () => void
+  onOpenFocusDialog: () => void
   isLoadingAnalysis?: boolean
   hasAnalysis?: boolean
   onToggleAnalysis?: () => void
@@ -65,7 +65,7 @@ export function EntryContentHeader({
   isLoading,
   error,
   onToggleReadable,
-  onOpenStarDialog,
+  onOpenFocusDialog,
   isLoadingAnalysis,
   hasAnalysis,
   onToggleAnalysis,
@@ -118,8 +118,8 @@ export function EntryContentHeader({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={onOpenStarDialog}
-            title={t('entry.save_to_markdown')}
+            onClick={onOpenFocusDialog}
+            title={entry.starred ? t('entry.focus_manage') : t('entry.focus_add')}
             className={cn(
               'no-drag-region flex size-9 items-center justify-center rounded-lg transition-colors',
               entry.starred

@@ -33,6 +33,46 @@ export interface AISettings {
   autoTranslateTitle: boolean;
   autoAnalysis: boolean;
   rateLimit: number;
+  workerCount: number;
+}
+
+export interface AIUsageCounter {
+  requestCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface AIUsageSceneStats extends AIUsageCounter {
+  scene: "analysis" | "translation" | "report";
+}
+
+export interface AIUsagePeriodStats extends AIUsageCounter {
+  scenes: AIUsageSceneStats[];
+}
+
+export interface AIUsageDayStats extends AIUsagePeriodStats {
+  date: string;
+}
+
+export interface AIUsageStats {
+  today: AIUsagePeriodStats;
+  last7Days: AIUsagePeriodStats;
+  allTime: AIUsagePeriodStats;
+  daily: AIUsageDayStats[];
+}
+
+export interface AIPromptTemplate {
+  key: string;
+  fileName: string;
+  variables: string[];
+  content: string;
+  defaultContent: string;
+}
+
+export interface AIPromptSettings {
+  dir: string;
+  templates: AIPromptTemplate[];
 }
 
 export interface AITestRequest {

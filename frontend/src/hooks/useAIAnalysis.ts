@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { analyzeArticle, ApiError, type AIAnalysis } from '@/api'
 import type { Entry } from '@/types/api'
@@ -8,6 +9,8 @@ interface UseAIAnalysisOptions {
   isReadableActive: boolean
   readableContent: string | null | undefined
   autoAnalysis: boolean
+  backgroundProcessing: boolean
+  backgroundStatusChecked: boolean
 }
 
 interface UseAIAnalysisReturn {
@@ -23,7 +26,10 @@ export function useAIAnalysis({
   isReadableActive,
   readableContent,
   autoAnalysis,
+  backgroundProcessing,
+  backgroundStatusChecked,
 }: UseAIAnalysisOptions): UseAIAnalysisReturn {
+  const queryClient = useQueryClient()
   const { t } = useTranslation()
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null)
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false)
@@ -33,6 +39,32 @@ export function useAIAnalysis({
   const analysisRequestedRef = useRef(false)
   const prevReadableActiveRef = useRef(false)
   const analysisManuallyDisabledRef = useRef(false)
+
+  const markEntryAsAnalyzed = useCallback((entryID: string) => {
+    queryClient.setQueryData<Entry>(['entry', entryID], (old) => {
+      if (!old) return old
+      return { ...old, hasAnalysis: true }
+    })
+
+    queryClient.setQueriesData<{ pages: { entries: Entry[] }[] }>(
+      { queryKey: ['entries'] },
+      (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          pages: old.pages.map((page) => ({
+            ...page,
+            entries: page.entries.map((item) =>
+              item.id === entryID ? { ...item, hasAnalysis: true } : item
+            ),
+          })),
+        }
+      }
+    )
+
+    queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
+    queryClient.invalidateQueries({ queryKey: ['aiProcessingStatus', entryID] })
+  }, [queryClient])
 
   useEffect(() => {
     // This hook mirrors the existing summary/translation lifecycle:
@@ -82,6 +114,7 @@ export function useAIAnalysis({
         abortController.signal
       )
       setAiAnalysis(result)
+      markEntryAsAnalyzed(entry.id)
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return
@@ -99,7 +132,7 @@ export function useAIAnalysis({
 
     setIsLoadingAnalysis(false)
     analysisAbortRef.current = null
-  }, [entry, readableContent, t])
+  }, [entry, readableContent, t, markEntryAsAnalyzed])
 
   const requestAnalysis = useCallback(async (forReadability?: boolean) => {
     analysisManuallyDisabledRef.current = false
@@ -128,11 +161,22 @@ export function useAIAnalysis({
 
   useEffect(() => {
     if (!autoAnalysis || !entry || isLoadingAnalysis) return
+    if (!backgroundStatusChecked) return
+    if (backgroundProcessing) return
     if (analysisManuallyDisabledRef.current) return
     if (aiAnalysis || analysisRequestedRef.current) return
 
     generateAnalysis(isReadableActive)
-  }, [autoAnalysis, entry, isReadableActive, isLoadingAnalysis, aiAnalysis, generateAnalysis])
+  }, [
+    autoAnalysis,
+    entry,
+    isReadableActive,
+    isLoadingAnalysis,
+    aiAnalysis,
+    generateAnalysis,
+    backgroundProcessing,
+    backgroundStatusChecked,
+  ])
 
   return {
     aiAnalysis,

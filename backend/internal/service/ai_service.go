@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"gist/backend/internal/config"
+	"gist/backend/internal/hashutil"
 	"gist/backend/internal/model"
 	"gist/backend/internal/repository"
 	"gist/backend/internal/service/ai"
@@ -73,6 +74,14 @@ type DailyReportNarrativeResult struct {
 	TrendOutlook string `json:"trendOutlook"`
 }
 
+type dailyReportNarrativeCachePayload struct {
+	Signature    string `json:"signature"`
+	Overview     string `json:"overview"`
+	RiskReview   string `json:"riskReview"`
+	TrendOutlook string `json:"trendOutlook"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
 type geocodeSearchResult struct {
 	Lat string `json:"lat"`
 	Lon string `json:"lon"`
@@ -86,9 +95,23 @@ const (
 	aiSceneAnalysis    = "analysis"
 	aiSceneTranslation = "translation"
 	aiSceneReport      = "report"
+
+	dailyReportNarrativeCacheKeyPrefix = "cache.ai_daily_report."
+	dailyArchiveReportStartMarker      = "<!-- GIST_DAILY_REPORT_START -->"
+	dailyArchiveReportEndMarker        = "<!-- GIST_DAILY_REPORT_END -->"
+	aiUsageRecordTimeout               = 3 * time.Second
 )
 
 type AIServiceOption func(*aiService)
+
+type dailyArchiveItem struct {
+	Root           string
+	FolderSegments []string
+	FeedTitle      string
+	EntryTitle     string
+	OriginalTitle  *string
+	Analysis       model.StoredAIAnalysis
+}
 
 // AIService provides AI-related operations like summarization and translation.
 type AIService interface {
@@ -130,12 +153,15 @@ type aiService struct {
 	translationRepo     repository.AITranslationRepository
 	listTranslationRepo repository.AIListTranslationRepository
 	analysisRepo        repository.AIAnalysisRepository
+	focusTagRepo        repository.EntryFocusTagRepository
 	settingsRepo        repository.SettingsRepository
 	rateLimiter         *ai.RateLimiter
 	entryRepo           repository.EntryRepository
 	feedRepo            repository.FeedRepository
 	folderRepo          repository.FolderRepository
 	analysisArchiveDir  string
+	promptManager       *ai.PromptManager
+	usageMu             sync.Mutex
 }
 
 // NewAIService creates a new AI service.
@@ -155,6 +181,7 @@ func NewAIService(
 		analysisRepo:        analysisRepo,
 		settingsRepo:        settingsRepo,
 		rateLimiter:         rateLimiter,
+		promptManager:       ai.NewPromptManager(""),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -176,6 +203,27 @@ func WithAIAnalysisArchive(
 		s.feedRepo = feedRepo
 		s.folderRepo = folderRepo
 	}
+}
+
+func WithAIEntryFocusTags(repo repository.EntryFocusTagRepository) AIServiceOption {
+	return func(s *aiService) {
+		s.focusTagRepo = repo
+	}
+}
+
+func WithAIPromptManager(manager *ai.PromptManager) AIServiceOption {
+	return func(s *aiService) {
+		if manager != nil {
+			s.promptManager = manager
+		}
+	}
+}
+
+func (s *aiService) prompts() *ai.PromptManager {
+	if s.promptManager == nil {
+		s.promptManager = ai.NewPromptManager("")
+	}
+	return s.promptManager
 }
 
 func (s *aiService) GetCachedSummary(ctx context.Context, entryID int64, isReadability bool) (*model.AISummary, error) {
@@ -223,7 +271,7 @@ func (s *aiService) Summarize(ctx context.Context, entryID int64, content, title
 	language := s.GetSummaryLanguage(ctx)
 
 	// Build system prompt
-	systemPrompt := ai.GetSummarizePrompt(title, language)
+	systemPrompt := s.prompts().SummarizePrompt(title, language)
 
 	// Convert HTML to plain text to save tokens
 	plainText := ai.HTMLToText(content)
@@ -232,7 +280,55 @@ func (s *aiService) Summarize(ctx context.Context, entryID int64, content, title
 	wrappedInput := ai.WrapInput(plainText)
 
 	// Start streaming
-	textCh, errCh := provider.SummarizeStream(ctx, systemPrompt, wrappedInput)
+	upstreamTextCh, upstreamErrCh := provider.SummarizeStream(ctx, systemPrompt, wrappedInput)
+	textCh := make(chan string)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(textCh)
+		defer close(errCh)
+
+		var builder strings.Builder
+		var upstreamErr error
+		currentTextCh := upstreamTextCh
+		currentErrCh := upstreamErrCh
+
+		for currentTextCh != nil || currentErrCh != nil {
+			select {
+			case chunk, ok := <-currentTextCh:
+				if !ok {
+					currentTextCh = nil
+					continue
+				}
+				builder.WriteString(chunk)
+				select {
+				case textCh <- chunk:
+				case <-ctx.Done():
+					return
+				}
+			case err, ok := <-currentErrCh:
+				if !ok {
+					currentErrCh = nil
+					continue
+				}
+				if err == nil {
+					continue
+				}
+				upstreamErr = err
+				select {
+				case errCh <- err:
+				default:
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		if upstreamErr == nil && ctx.Err() == nil {
+			s.recordAIUsageEstimate(aiSceneAnalysis, systemPrompt, wrappedInput, builder.String())
+		}
+	}()
+
 	logger.Info("ai summarize stream started", "module", "service", "action", "fetch", "resource", "ai", "result", "ok", "entry_id", entryID, "provider", cfg.Provider, "model", cfg.Model)
 
 	return textCh, errCh, nil
@@ -329,6 +425,59 @@ func (s *aiService) getAIConfig(ctx context.Context, scene string) (ai.Config, e
 	return cfg, nil
 }
 
+func (s *aiService) recordAIUsageEstimate(scene, promptText, inputText, outputText string) {
+	promptTokens := estimateAITokens(promptText) + estimateAITokens(inputText)
+	completionTokens := estimateAITokens(outputText)
+	s.recordAIUsageCounts(scene, promptTokens, completionTokens)
+}
+
+func (s *aiService) recordAIUsageCounts(scene string, promptTokens, completionTokens int) {
+	if s.settingsRepo == nil {
+		return
+	}
+	if promptTokens <= 0 && completionTokens <= 0 {
+		return
+	}
+
+	recordCtx, cancel := context.WithTimeout(context.Background(), aiUsageRecordTimeout)
+	defer cancel()
+
+	scene = normalizeAIUsageScene(scene)
+	key := aiUsageDailyKey(time.Now())
+
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
+	var day storedAIUsageDayStats
+	setting, err := s.settingsRepo.Get(recordCtx, key)
+	if err != nil {
+		logger.Warn("ai usage stats load failed", "module", "service", "action", "fetch", "resource", "ai_usage", "result", "failed", "key", key, "error", err)
+		return
+	}
+	if setting != nil && strings.TrimSpace(setting.Value) != "" {
+		day, err = decodeStoredAIUsageDayStats(setting.Value, parseAIUsageDateFromKey(key))
+		if err != nil {
+			logger.Warn("ai usage stats decode failed", "module", "service", "action", "fetch", "resource", "ai_usage", "result", "failed", "key", key, "error", err)
+			day = storedAIUsageDayStats{}
+		}
+	}
+	normalizeStoredAIUsageDayStats(&day, parseAIUsageDateFromKey(key))
+
+	day.Totals.Add(promptTokens, completionTokens)
+	sceneCounter := day.Scenes[scene]
+	sceneCounter.Add(promptTokens, completionTokens)
+	day.Scenes[scene] = sceneCounter
+
+	data, err := json.Marshal(day)
+	if err != nil {
+		logger.Warn("ai usage stats encode failed", "module", "service", "action", "save", "resource", "ai_usage", "result", "failed", "key", key, "error", err)
+		return
+	}
+	if err := s.settingsRepo.Set(recordCtx, key, string(data)); err != nil {
+		logger.Warn("ai usage stats save failed", "module", "service", "action", "save", "resource", "ai_usage", "result", "failed", "key", key, "error", err)
+	}
+}
+
 func (s *aiService) GetCachedTranslation(ctx context.Context, entryID int64, isReadability bool) (*model.AITranslation, error) {
 	language := s.GetSummaryLanguage(ctx)
 	translation, err := s.translationRepo.Get(ctx, entryID, isReadability, language)
@@ -390,7 +539,7 @@ func (s *aiService) Analyze(ctx context.Context, entryID int64, content, title s
 	}
 
 	language := s.GetSummaryLanguage(ctx)
-	systemPrompt := ai.GetArticleAnalysisPrompt(title, language)
+	systemPrompt := s.prompts().ArticleAnalysisPrompt(title, language)
 	plainText := ai.HTMLToText(content)
 	wrappedInput := ai.WrapInput(plainText)
 
@@ -399,6 +548,7 @@ func (s *aiService) Analyze(ctx context.Context, entryID int64, content, title s
 		logger.Warn("ai analysis complete failed", "module", "service", "action", "fetch", "resource", "ai", "result", "failed", "entry_id", entryID, "error", err)
 		return nil, err
 	}
+	s.recordAIUsageEstimate(aiSceneAnalysis, systemPrompt, wrappedInput, raw)
 
 	parsed, err := parseArticleAnalysis(raw)
 	if err != nil {
@@ -427,16 +577,51 @@ func (s *aiService) Analyze(ctx context.Context, entryID int64, content, title s
 		logger.Warn("ai analysis cache save failed", "module", "service", "action", "save", "resource", "ai", "result", "failed", "entry_id", entryID, "error", err)
 		return nil, err
 	}
+	analysis.CreatedAt = time.Now().In(time.Local)
 
-	storedTitle := s.ensureStoredAnalysisTitleTranslation(ctx, entryID, title)
-	s.archiveAnalysisMarkdown(ctx, entryID, storedTitle, *analysis)
+	s.ensureStoredAnalysisTitleTranslation(ctx, entryID, title)
+	s.archiveAnalysisMarkdown(ctx, entryID, *analysis)
 
 	logger.Info("ai analysis completed", "module", "service", "action", "fetch", "resource", "ai", "result", "ok", "entry_id", entryID, "readability", isReadability)
 	return analysis, nil
 }
 
 func (s *aiService) ListStoredAnalyses(ctx context.Context, limit, offset int) ([]model.StoredAIAnalysis, error) {
-	return s.analysisRepo.List(ctx, limit, offset)
+	items, err := s.analysisRepo.List(ctx, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachFocusTags(ctx, items)
+}
+
+func (s *aiService) PublishDailyArchiveReport(ctx context.Context, day time.Time) error {
+	report, err := s.BuildDailyAnalysisReport(ctx, day)
+	if err != nil {
+		return err
+	}
+
+	groupedItems, err := s.collectDailyArchiveItemsByRoot(ctx, day)
+	if err != nil {
+		return err
+	}
+	if len(groupedItems) == 0 {
+		return nil
+	}
+
+	reportBlock := buildDailyArchiveReportBlock(report)
+	roots := make([]string, 0, len(groupedItems))
+	for root := range groupedItems {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+
+	for _, root := range roots {
+		if err := s.writeDailyArchiveFile(day, root, groupedItems[root], reportBlock); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *aiService) ensureStoredAnalysisTitleTranslation(ctx context.Context, entryID int64, title string) string {
@@ -471,11 +656,14 @@ func (s *aiService) ensureStoredAnalysisTitleTranslation(ctx context.Context, en
 		return title
 	}
 
-	translatedTitle, err := provider.Complete(ctx, ai.GetTranslateTextPrompt("title", storedAnalysisTitleLanguage), ai.WrapInput(title))
+	systemPrompt := s.prompts().TranslateTextPrompt("title", storedAnalysisTitleLanguage)
+	wrappedTitle := ai.WrapInput(title)
+	translatedTitle, err := provider.Complete(ctx, systemPrompt, wrappedTitle)
 	if err != nil {
 		logger.Warn("ai analysis title translate failed", "module", "service", "action", "fetch", "resource", "ai", "result", "failed", "entry_id", entryID, "error", err)
 		return title
 	}
+	s.recordAIUsageEstimate(aiSceneTranslation, systemPrompt, wrappedTitle, translatedTitle)
 
 	translatedTitle = strings.TrimSpace(translatedTitle)
 	if translatedTitle == "" {
@@ -496,7 +684,7 @@ func (s *aiService) ensureStoredAnalysisTitleTranslation(ctx context.Context, en
 	return translatedTitle
 }
 
-func (s *aiService) archiveAnalysisMarkdown(ctx context.Context, entryID int64, translatedTitle string, analysis model.AIAnalysis) {
+func (s *aiService) archiveAnalysisMarkdown(ctx context.Context, entryID int64, analysis model.AIAnalysis) {
 	if s.entryRepo == nil || s.feedRepo == nil {
 		return
 	}
@@ -513,39 +701,31 @@ func (s *aiService) archiveAnalysisMarkdown(ctx context.Context, entryID int64, 
 		return
 	}
 
-	archiveDir, folderSegments := s.resolveAnalysisArchiveLocation(ctx, feed)
-	if strings.TrimSpace(archiveDir) == "" {
+	archiveDir, _ := s.resolveAnalysisArchiveLocation(ctx, feed)
+	archiveDir = normalizeArchiveRoot(archiveDir)
+	if archiveDir == "" {
 		return
 	}
 
-	now := time.Now().In(time.Local)
-	pathParts := []string{archiveDir, now.Format("20060102")}
-	if len(folderSegments) > 0 {
-		pathParts = append(pathParts, folderSegments...)
+	archiveDay := analysis.CreatedAt
+	if archiveDay.IsZero() {
+		archiveDay = time.Now()
 	}
-	pathParts = append(pathParts, sanitizeArchivePathSegment(feed.Title, "Feed"))
+	archiveDay = archiveDay.In(time.Local)
 
-	dirPath := filepath.Join(pathParts...)
-	if err := os.MkdirAll(dirPath, 0o755); err != nil {
-		logger.Warn("ai analysis archive mkdir failed", "module", "service", "action", "save", "resource", "ai_archive", "result", "failed", "entry_id", entryID, "path", dirPath, "error", err)
+	groupedItems, err := s.collectDailyArchiveItemsByRoot(ctx, archiveDay)
+	if err != nil {
+		logger.Warn("ai analysis archive collect failed", "module", "service", "action", "fetch", "resource", "ai_archive", "result", "failed", "entry_id", entryID, "error", err)
 		return
 	}
 
-	fileTitle := strings.TrimSpace(translatedTitle)
-	if fileTitle == "" && entry.Title != nil {
-		fileTitle = strings.TrimSpace(*entry.Title)
-	}
-	fileTitle = sanitizeArchivePathSegment(fileTitle, fmt.Sprintf("entry-%d", entryID))
-
-	filePath := resolveArchiveFilePath(dirPath, fileTitle, entryID)
-
-	content := buildAIAnalysisMarkdown(entryID, entry, feed, analysis, translatedTitle, now)
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
-		logger.Warn("ai analysis archive write failed", "module", "service", "action", "save", "resource", "ai_archive", "result", "failed", "entry_id", entryID, "path", filePath, "error", err)
+	reportBlock := extractDailyArchiveReportBlockFromFile(dailyArchiveFilePath(archiveDir, archiveDay))
+	if err := s.writeDailyArchiveFile(archiveDay, archiveDir, groupedItems[archiveDir], reportBlock); err != nil {
+		logger.Warn("ai analysis archive write failed", "module", "service", "action", "save", "resource", "ai_archive", "result", "failed", "entry_id", entryID, "path", dailyArchiveFilePath(archiveDir, archiveDay), "error", err)
 		return
 	}
 
-	logger.Info("ai analysis archived", "module", "service", "action", "save", "resource", "ai_archive", "result", "ok", "entry_id", entryID, "path", filePath)
+	logger.Info("ai analysis archived", "module", "service", "action", "save", "resource", "ai_archive", "result", "ok", "entry_id", entryID, "path", dailyArchiveFilePath(archiveDir, archiveDay))
 }
 
 func (s *aiService) resolveAnalysisArchiveLocation(ctx context.Context, feed model.Feed) (string, []string) {
@@ -597,83 +777,331 @@ func buildArchiveFolderSegments(folderChain []model.Folder) []string {
 	segments := make([]string, 0, len(folderChain))
 	for i := len(folderChain) - 1; i >= 0; i-- {
 		folder := folderChain[i]
-		segments = append(segments, sanitizeArchivePathSegment(folder.Name, fmt.Sprintf("folder-%d", folder.ID)))
+		name := strings.TrimSpace(folder.Name)
+		if name == "" {
+			name = fmt.Sprintf("folder-%d", folder.ID)
+		}
+		segments = append(segments, name)
 	}
 	return segments
 }
 
-func buildAIAnalysisMarkdown(
-	entryID int64,
-	entry model.Entry,
-	feed model.Feed,
-	analysis model.AIAnalysis,
-	translatedTitle string,
-	analyzedAt time.Time,
-) string {
-	title := strings.TrimSpace(translatedTitle)
-	if title == "" && entry.Title != nil {
-		title = strings.TrimSpace(*entry.Title)
+func normalizeArchiveRoot(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
 	}
-	if title == "" {
-		title = fmt.Sprintf("Entry %d", entryID)
+	return filepath.Clean(value)
+}
+
+func dailyArchiveFilePath(root string, day time.Time) string {
+	return filepath.Join(root, day.In(time.Local).Format("20060102")+".md")
+}
+
+func (s *aiService) collectDailyArchiveItemsByRoot(ctx context.Context, day time.Time) (map[string][]dailyArchiveItem, error) {
+	day = day.In(time.Local)
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local)
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	items, err := s.analysisRepo.ListByCreatedRange(ctx, dayStart, dayEnd)
+	if err != nil {
+		return nil, err
 	}
+
+	feedCache := make(map[int64]model.Feed)
+	entryCache := make(map[int64]model.Entry)
+	grouped := make(map[string]map[int64]dailyArchiveItem)
+	for _, item := range items {
+		root, folderSegments, feedTitle, err := s.resolveStoredAnalysisArchiveLocation(ctx, item, feedCache)
+		if err != nil {
+			logger.Warn("ai archive resolve stored location failed", "module", "service", "action", "fetch", "resource", "ai_archive", "result", "failed", "entry_id", item.EntryID, "feed_id", item.FeedID, "error", err)
+			continue
+		}
+		if root == "" {
+			continue
+		}
+
+		entryTitle := fmt.Sprintf("Entry %d", item.EntryID)
+		if item.EntryTitle != nil && strings.TrimSpace(*item.EntryTitle) != "" {
+			entryTitle = strings.TrimSpace(*item.EntryTitle)
+		}
+		feedTitle = strings.TrimSpace(feedTitle)
+		if feedTitle == "" {
+			feedTitle = "Feed"
+		}
+
+		var originalTitle *string
+		if s.entryRepo != nil {
+			entry, ok := entryCache[item.EntryID]
+			if !ok {
+				entry, err = s.entryRepo.GetByID(ctx, item.EntryID)
+				if err != nil {
+					logger.Warn("ai archive load original title failed", "module", "service", "action", "fetch", "resource", "ai_archive", "result", "failed", "entry_id", item.EntryID, "error", err)
+				} else {
+					entryCache[item.EntryID] = entry
+				}
+			}
+			if ok || entry.ID != 0 {
+				originalTitle = entry.Title
+			}
+		}
+
+		candidate := dailyArchiveItem{
+			Root:           root,
+			FolderSegments: folderSegments,
+			FeedTitle:      feedTitle,
+			EntryTitle:     entryTitle,
+			OriginalTitle:  originalTitle,
+			Analysis:       item,
+		}
+
+		if _, ok := grouped[root]; !ok {
+			grouped[root] = make(map[int64]dailyArchiveItem)
+		}
+
+		current, ok := grouped[root][item.EntryID]
+		if !ok || shouldReplaceDailyArchiveItem(current, candidate) {
+			grouped[root][item.EntryID] = candidate
+		}
+	}
+
+	result := make(map[string][]dailyArchiveItem, len(grouped))
+	for root, deduped := range grouped {
+		items := make([]dailyArchiveItem, 0, len(deduped))
+		for _, item := range deduped {
+			items = append(items, item)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			left := items[i]
+			right := items[j]
+			if cmp := compareStringSlices(left.FolderSegments, right.FolderSegments); cmp != 0 {
+				return cmp < 0
+			}
+			if left.FeedTitle != right.FeedTitle {
+				return left.FeedTitle < right.FeedTitle
+			}
+			leftPublished := time.Time{}
+			if left.Analysis.PublishedAt != nil {
+				leftPublished = left.Analysis.PublishedAt.In(time.Local)
+			}
+			rightPublished := time.Time{}
+			if right.Analysis.PublishedAt != nil {
+				rightPublished = right.Analysis.PublishedAt.In(time.Local)
+			}
+			if !leftPublished.Equal(rightPublished) {
+				return leftPublished.After(rightPublished)
+			}
+			if !left.Analysis.CreatedAt.Equal(right.Analysis.CreatedAt) {
+				return left.Analysis.CreatedAt.After(right.Analysis.CreatedAt)
+			}
+			if left.EntryTitle != right.EntryTitle {
+				return left.EntryTitle < right.EntryTitle
+			}
+			return left.Analysis.EntryID < right.Analysis.EntryID
+		})
+		result[root] = items
+	}
+
+	return result, nil
+}
+
+func shouldReplaceDailyArchiveItem(current, candidate dailyArchiveItem) bool {
+	if candidate.Analysis.CreatedAt.After(current.Analysis.CreatedAt) {
+		return true
+	}
+	if candidate.Analysis.CreatedAt.Before(current.Analysis.CreatedAt) {
+		return false
+	}
+	if candidate.Analysis.IsReadability != current.Analysis.IsReadability {
+		return candidate.Analysis.IsReadability
+	}
+	return candidate.Analysis.ID > current.Analysis.ID
+}
+
+func compareStringSlices(left, right []string) int {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for i := 0; i < limit; i++ {
+		if left[i] == right[i] {
+			continue
+		}
+		if left[i] < right[i] {
+			return -1
+		}
+		return 1
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (s *aiService) resolveStoredAnalysisArchiveLocation(ctx context.Context, item model.StoredAIAnalysis, feedCache map[int64]model.Feed) (string, []string, string, error) {
+	feed, ok := feedCache[item.FeedID]
+	if !ok {
+		var err error
+		feed, err = s.feedRepo.GetByID(ctx, item.FeedID)
+		if err != nil {
+			return "", nil, "", err
+		}
+		feedCache[item.FeedID] = feed
+	}
+
+	root, folderSegments := s.resolveAnalysisArchiveLocation(ctx, feed)
+	root = normalizeArchiveRoot(root)
+	return root, folderSegments, feed.Title, nil
+}
+
+func (s *aiService) writeDailyArchiveFile(day time.Time, root string, items []dailyArchiveItem, reportBlock string) error {
+	root = normalizeArchiveRoot(root)
+	if root == "" {
+		return nil
+	}
+	if len(items) == 0 && strings.TrimSpace(reportBlock) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+
+	content := buildDailyArchiveDocument(day, items, reportBlock)
+	return os.WriteFile(dailyArchiveFilePath(root, day), []byte(content), 0o644)
+}
+
+func buildDailyArchiveDocument(day time.Time, items []dailyArchiveItem, reportBlock string) string {
+	day = day.In(time.Local)
 
 	var builder strings.Builder
 	builder.WriteString("# ")
-	builder.WriteString(title)
-	builder.WriteString("\n\n")
-	builder.WriteString(fmt.Sprintf("- Entry ID: %d\n", entryID))
-	builder.WriteString(fmt.Sprintf("- Feed: %s\n", strings.TrimSpace(feed.Title)))
-	if entry.Title != nil && strings.TrimSpace(*entry.Title) != "" && strings.TrimSpace(*entry.Title) != title {
-		builder.WriteString(fmt.Sprintf("- Original Title: %s\n", strings.TrimSpace(*entry.Title)))
+	builder.WriteString(day.Format("2006-01-02"))
+	builder.WriteString(" AI 分析归档\n\n")
+
+	reportBlock = strings.TrimSpace(reportBlock)
+	if reportBlock != "" {
+		builder.WriteString(reportBlock)
+		builder.WriteString("\n\n")
 	}
-	if entry.URL != nil && strings.TrimSpace(*entry.URL) != "" {
-		builder.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*entry.URL)))
+
+	builder.WriteString("## 归档条目\n\n")
+	if len(items) == 0 {
+		builder.WriteString("暂无分析条目。\n")
+		return builder.String()
 	}
-	if entry.Author != nil && strings.TrimSpace(*entry.Author) != "" {
-		builder.WriteString(fmt.Sprintf("- Author: %s\n", strings.TrimSpace(*entry.Author)))
+
+	lastFolderSegments := []string{}
+	lastFeedTitle := ""
+	for _, item := range items {
+		commonDepth := 0
+		for commonDepth < len(lastFolderSegments) && commonDepth < len(item.FolderSegments) && lastFolderSegments[commonDepth] == item.FolderSegments[commonDepth] {
+			commonDepth++
+		}
+
+		for idx := commonDepth; idx < len(item.FolderSegments); idx++ {
+			builder.WriteString(headingLine(3+idx, item.FolderSegments[idx]))
+			builder.WriteString("\n\n")
+		}
+
+		if commonDepth != len(lastFolderSegments) || lastFeedTitle != item.FeedTitle {
+			builder.WriteString(headingLine(3+len(item.FolderSegments), item.FeedTitle))
+			builder.WriteString("\n\n")
+		}
+
+		builder.WriteString(headingLine(4+len(item.FolderSegments), item.EntryTitle))
+		builder.WriteString("\n\n")
+		builder.WriteString(buildDailyArchiveEntryMarkdown(item))
+		builder.WriteString("\n\n")
+
+		lastFolderSegments = append(lastFolderSegments[:0], item.FolderSegments...)
+		lastFolderSegments = append([]string(nil), lastFolderSegments...)
+		lastFeedTitle = item.FeedTitle
 	}
-	if entry.PublishedAt != nil {
-		builder.WriteString(fmt.Sprintf("- Published At: %s\n", entry.PublishedAt.In(time.Local).Format(time.RFC3339)))
+
+	return strings.TrimRight(builder.String(), "\n") + "\n"
+}
+
+func headingLine(level int, title string) string {
+	if level < 1 {
+		level = 1
+	}
+	if level > 6 {
+		level = 6
+	}
+	return strings.Repeat("#", level) + " " + strings.TrimSpace(title)
+}
+
+func buildDailyArchiveEntryMarkdown(item dailyArchiveItem) string {
+	analysis := item.Analysis
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("- Entry ID: %d\n", analysis.EntryID))
+	builder.WriteString(fmt.Sprintf("- Feed: %s\n", strings.TrimSpace(item.FeedTitle)))
+	if item.OriginalTitle != nil && strings.TrimSpace(*item.OriginalTitle) != "" && strings.TrimSpace(*item.OriginalTitle) != strings.TrimSpace(item.EntryTitle) {
+		builder.WriteString(fmt.Sprintf("- Original Title: %s\n", strings.TrimSpace(*item.OriginalTitle)))
+	}
+	if analysis.EntryURL != nil && strings.TrimSpace(*analysis.EntryURL) != "" {
+		builder.WriteString(fmt.Sprintf("- URL: %s\n", strings.TrimSpace(*analysis.EntryURL)))
+	}
+	if analysis.Author != nil && strings.TrimSpace(*analysis.Author) != "" {
+		builder.WriteString(fmt.Sprintf("- Author: %s\n", strings.TrimSpace(*analysis.Author)))
+	}
+	if analysis.PublishedAt != nil {
+		builder.WriteString(fmt.Sprintf("- Published At: %s\n", analysis.PublishedAt.In(time.Local).Format(time.RFC3339)))
 	}
 	builder.WriteString(fmt.Sprintf("- AI Language: %s\n", strings.TrimSpace(analysis.Language)))
-	builder.WriteString(fmt.Sprintf("- Analyzed At: %s\n\n", analyzedAt.Format(time.RFC3339)))
+	builder.WriteString(fmt.Sprintf("- Analyzed At: %s\n", analysis.CreatedAt.In(time.Local).Format(time.RFC3339)))
+	builder.WriteString(fmt.Sprintf("- Readability: %t\n\n", analysis.IsReadability))
 
-	builder.WriteString("## 摘要\n\n")
+	builder.WriteString("**摘要**\n\n")
 	builder.WriteString(strings.TrimSpace(analysis.Summary))
 	builder.WriteString("\n\n")
 
-	builder.WriteString("## 标签\n\n")
+	builder.WriteString("**标签**\n\n")
 	builder.WriteString(strings.TrimSpace(analysis.Tag))
 	builder.WriteString("\n\n")
 
-	builder.WriteString("## 情绪与重要性\n\n")
+	builder.WriteString("**情绪与重要性**\n\n")
 	builder.WriteString(fmt.Sprintf("- Sentiment: %s\n", strings.TrimSpace(analysis.Sentiment)))
 	builder.WriteString(fmt.Sprintf("- Importance: %d/10\n\n", analysis.Importance))
 
-	builder.WriteString("## 实体\n\n")
-	if len(analysis.Entities) == 0 {
-		builder.WriteString("- None\n\n")
-	} else {
-		for _, entity := range analysis.Entities {
-			entity = strings.TrimSpace(entity)
-			if entity == "" {
-				continue
-			}
-			builder.WriteString("- ")
-			builder.WriteString(entity)
-			builder.WriteString("\n")
-		}
-		builder.WriteString("\n")
-	}
+	builder.WriteString("**实体**\n\n")
+	builder.WriteString(formatDailyArchiveList(analysis.Entities, "- None"))
+	builder.WriteString("\n")
 
 	if analysis.Latitude != nil && analysis.Longitude != nil {
-		builder.WriteString("## 坐标\n\n")
+		builder.WriteString("\n**坐标**\n\n")
 		builder.WriteString(fmt.Sprintf("- Latitude: %.6f\n", *analysis.Latitude))
-		builder.WriteString(fmt.Sprintf("- Longitude: %.6f\n\n", *analysis.Longitude))
+		builder.WriteString(fmt.Sprintf("- Longitude: %.6f\n", *analysis.Longitude))
 	}
 
-	return builder.String()
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func formatDailyArchiveList(items []string, emptyFallback string) string {
+	filtered := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if len(filtered) == 0 {
+		return emptyFallback
+	}
+
+	var builder strings.Builder
+	for _, item := range filtered {
+		builder.WriteString("- ")
+		builder.WriteString(item)
+		builder.WriteString("\n")
+	}
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func sanitizeArchivePathSegment(value, fallback string) string {
@@ -715,8 +1143,7 @@ func (s *aiService) ensureCachedAnalysisArchive(ctx context.Context, entryID int
 	if analysis == nil {
 		return
 	}
-	storedTitle := s.resolveStoredAnalysisTitle(ctx, entryID)
-	s.archiveAnalysisMarkdown(ctx, entryID, storedTitle, *analysis)
+	s.archiveAnalysisMarkdown(ctx, entryID, *analysis)
 }
 
 func (s *aiService) resolveStoredAnalysisTitle(ctx context.Context, entryID int64) string {
@@ -740,29 +1167,86 @@ func (s *aiService) resolveStoredAnalysisTitle(ctx context.Context, entryID int6
 	return s.ensureStoredAnalysisTitleTranslation(ctx, entryID, strings.TrimSpace(*entry.Title))
 }
 
-func resolveArchiveFilePath(dirPath, fileTitle string, entryID int64) string {
-	preferredPath := filepath.Join(dirPath, fileTitle+".md")
-	suffixedPath := filepath.Join(dirPath, fmt.Sprintf("%s-%d.md", fileTitle, entryID))
-
-	switch {
-	case archiveFileBelongsToEntry(preferredPath, entryID):
-		return preferredPath
-	case archiveFileBelongsToEntry(suffixedPath, entryID):
-		return suffixedPath
-	}
-
-	if _, err := os.Stat(preferredPath); err == nil {
-		return suffixedPath
-	}
-	return preferredPath
-}
-
-func archiveFileBelongsToEntry(path string, entryID int64) bool {
+func extractDailyArchiveReportBlockFromFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return ""
 	}
-	return strings.Contains(string(data), fmt.Sprintf("- Entry ID: %d\n", entryID))
+	return extractDailyArchiveReportBlock(string(data))
+}
+
+func extractDailyArchiveReportBlock(content string) string {
+	start := strings.Index(content, dailyArchiveReportStartMarker)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(content, dailyArchiveReportEndMarker)
+	if end < 0 || end < start {
+		return ""
+	}
+	end += len(dailyArchiveReportEndMarker)
+	return strings.TrimSpace(content[start:end])
+}
+
+func buildDailyArchiveReportBlock(report *model.AIDailyReport) string {
+	if report == nil {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.WriteString(dailyArchiveReportStartMarker)
+	builder.WriteString("\n## AI 日报\n\n")
+	builder.WriteString(fmt.Sprintf("- 日期: %s\n", strings.TrimSpace(report.Date)))
+	builder.WriteString(fmt.Sprintf("- 分析总数: %d\n", report.Total))
+	builder.WriteString(fmt.Sprintf("- 重点关注数: %d\n", report.FocusedTotal))
+	builder.WriteString(fmt.Sprintf("- 情绪分布: Positive %d / Neutral %d / Negative %d / Other %d\n\n", report.Sentiment.Positive, report.Sentiment.Neutral, report.Sentiment.Negative, report.Sentiment.Other))
+
+	if strings.TrimSpace(report.Overview) != "" {
+		builder.WriteString("### 今日热点综述\n\n")
+		builder.WriteString(strings.TrimSpace(report.Overview))
+		builder.WriteString("\n\n")
+	}
+	if strings.TrimSpace(report.RiskReview) != "" {
+		builder.WriteString("### 风险点评\n\n")
+		builder.WriteString(strings.TrimSpace(report.RiskReview))
+		builder.WriteString("\n\n")
+	}
+	if strings.TrimSpace(report.TrendOutlook) != "" {
+		builder.WriteString("### 趋势判断\n\n")
+		builder.WriteString(strings.TrimSpace(report.TrendOutlook))
+		builder.WriteString("\n\n")
+	}
+	if len(report.TopTags) > 0 {
+		builder.WriteString("### 高频标签\n\n")
+		for _, item := range report.TopTags {
+			builder.WriteString(fmt.Sprintf("- %s (%d)\n", strings.TrimSpace(item.Name), item.Count))
+		}
+		builder.WriteString("\n")
+	}
+	if len(report.FocusedTags) > 0 {
+		builder.WriteString("### 重点关注标签\n\n")
+		for _, item := range report.FocusedTags {
+			builder.WriteString(fmt.Sprintf("- %s (%d)\n", strings.TrimSpace(item.Name), item.Count))
+		}
+		builder.WriteString("\n")
+	}
+	if len(report.TopEntities) > 0 {
+		builder.WriteString("### 高频实体\n\n")
+		for _, item := range report.TopEntities {
+			builder.WriteString(fmt.Sprintf("- %s (%d)\n", strings.TrimSpace(item.Name), item.Count))
+		}
+		builder.WriteString("\n")
+	}
+	if len(report.TopFeeds) > 0 {
+		builder.WriteString("### 重点来源\n\n")
+		for _, item := range report.TopFeeds {
+			builder.WriteString(fmt.Sprintf("- %s (%d)\n", strings.TrimSpace(item.FeedTitle), item.Count))
+		}
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString(dailyArchiveReportEndMarker)
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func (s *aiService) BuildDailyAnalysisReport(ctx context.Context, day time.Time) (*model.AIDailyReport, error) {
@@ -773,15 +1257,24 @@ func (s *aiService) BuildDailyAnalysisReport(ctx context.Context, day time.Time)
 	if err != nil {
 		return nil, err
 	}
+	items, err = s.attachFocusTags(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+
+	focusedItems := filterFocusedAnalyses(items)
 
 	report := &model.AIDailyReport{
-		Date:        dayStart.Format("2006-01-02"),
-		Total:       len(items),
-		Sentiment:   model.AIDailyReportSentiment{},
-		TopAnalyses: topStoredAnalyses(items, 10),
-		TopTags:     buildTopCountItems(items, 10, extractTagSegments),
-		TopEntities: buildTopCountItems(items, 10, extractEntities),
-		TopFeeds:    buildTopFeedMetrics(items, 10),
+		Date:         dayStart.Format("2006-01-02"),
+		Total:        len(items),
+		FocusedTotal: len(focusedItems),
+		Sentiment:    model.AIDailyReportSentiment{},
+		TopAnalyses:  topStoredAnalyses(items, 10),
+		TopTags:      buildTopCountItems(items, 10, extractTagSegments),
+		TopEntities:  buildTopCountItems(items, 10, extractEntities),
+		TopFeeds:     buildTopFeedMetrics(items, 10),
+		FocusedTags:  buildTopCountItems(focusedItems, 10, extractFocusTags),
+		FocusedItems: topStoredAnalyses(focusedItems, 10),
 	}
 
 	for _, item := range items {
@@ -798,13 +1291,28 @@ func (s *aiService) BuildDailyAnalysisReport(ctx context.Context, day time.Time)
 	}
 
 	if report.Total > 0 {
-		narrative, err := s.generateDailyReportNarrative(ctx, report)
+		input, err := buildDailyReportNarrativeInput(report)
 		if err != nil {
-			logger.Warn("ai daily report narrative failed", "module", "service", "action", "fetch", "resource", "ai_report", "result", "failed", "date", report.Date, "error", err)
+			logger.Warn("ai daily report narrative input failed", "module", "service", "action", "fetch", "resource", "ai_report", "result", "failed", "date", report.Date, "error", err)
 		} else {
-			report.Overview = narrative.Overview
-			report.RiskReview = narrative.RiskReview
-			report.TrendOutlook = narrative.TrendOutlook
+			signature := hashutil.SHA256Hex(input)
+			narrative, cacheErr := s.getCachedDailyReportNarrative(ctx, report.Date, signature)
+			if cacheErr != nil {
+				logger.Warn("ai daily report narrative cache lookup failed", "module", "service", "action", "fetch", "resource", "ai_report_cache", "result", "failed", "date", report.Date, "error", cacheErr)
+			}
+			if narrative == nil {
+				narrative, err = s.generateDailyReportNarrativeWithInput(ctx, report, input)
+				if err != nil {
+					logger.Warn("ai daily report narrative failed", "module", "service", "action", "fetch", "resource", "ai_report", "result", "failed", "date", report.Date, "error", err)
+				} else if saveErr := s.saveDailyReportNarrativeCache(ctx, report.Date, signature, narrative); saveErr != nil {
+					logger.Warn("ai daily report narrative cache save failed", "module", "service", "action", "save", "resource", "ai_report_cache", "result", "failed", "date", report.Date, "error", saveErr)
+				}
+			}
+			if narrative != nil {
+				report.Overview = narrative.Overview
+				report.RiskReview = narrative.RiskReview
+				report.TrendOutlook = narrative.TrendOutlook
+			}
 		}
 	}
 
@@ -814,6 +1322,22 @@ func (s *aiService) BuildDailyAnalysisReport(ctx context.Context, day time.Time)
 func (s *aiService) generateDailyReportNarrative(ctx context.Context, report *model.AIDailyReport) (*DailyReportNarrativeResult, error) {
 	if report == nil || report.Total == 0 {
 		return nil, nil
+	}
+
+	input, err := buildDailyReportNarrativeInput(report)
+	if err != nil {
+		return nil, err
+	}
+	return s.generateDailyReportNarrativeWithInput(ctx, report, input)
+}
+
+func (s *aiService) generateDailyReportNarrativeWithInput(ctx context.Context, report *model.AIDailyReport, input string) (*DailyReportNarrativeResult, error) {
+	if report == nil || report.Total == 0 {
+		return nil, nil
+	}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return nil, fmt.Errorf("daily report narrative input is empty")
 	}
 
 	cfg, err := s.getAIConfig(ctx, aiSceneReport)
@@ -831,15 +1355,13 @@ func (s *aiService) generateDailyReportNarrative(ctx context.Context, report *mo
 	}
 
 	language := s.GetSummaryLanguage(ctx)
-	input, err := buildDailyReportNarrativeInput(report)
+	systemPrompt := s.prompts().DailyReportPrompt(report.Date, language)
+	wrappedInput := ai.WrapInput(input)
+	raw, err := provider.Complete(ctx, systemPrompt, wrappedInput)
 	if err != nil {
 		return nil, err
 	}
-
-	raw, err := provider.Complete(ctx, ai.GetDailyReportPrompt(report.Date, language), ai.WrapInput(input))
-	if err != nil {
-		return nil, err
-	}
+	s.recordAIUsageEstimate(aiSceneReport, systemPrompt, wrappedInput, raw)
 
 	narrative, err := parseDailyReportNarrative(raw)
 	if err != nil {
@@ -847,6 +1369,64 @@ func (s *aiService) generateDailyReportNarrative(ctx context.Context, report *mo
 	}
 
 	return &narrative, nil
+}
+
+func (s *aiService) getCachedDailyReportNarrative(ctx context.Context, date, signature string) (*DailyReportNarrativeResult, error) {
+	if s.settingsRepo == nil {
+		return nil, nil
+	}
+	date = strings.TrimSpace(date)
+	signature = strings.TrimSpace(signature)
+	if date == "" || signature == "" {
+		return nil, nil
+	}
+
+	setting, err := s.settingsRepo.Get(ctx, dailyReportNarrativeCacheKey(date))
+	if err != nil || setting == nil || strings.TrimSpace(setting.Value) == "" {
+		return nil, err
+	}
+
+	var payload dailyReportNarrativeCachePayload
+	if err := json.Unmarshal([]byte(setting.Value), &payload); err != nil {
+		return nil, fmt.Errorf("decode daily report narrative cache: %w", err)
+	}
+	if strings.TrimSpace(payload.Signature) != signature {
+		return nil, nil
+	}
+
+	return &DailyReportNarrativeResult{
+		Overview:     payload.Overview,
+		RiskReview:   payload.RiskReview,
+		TrendOutlook: payload.TrendOutlook,
+	}, nil
+}
+
+func (s *aiService) saveDailyReportNarrativeCache(ctx context.Context, date, signature string, narrative *DailyReportNarrativeResult) error {
+	if s.settingsRepo == nil || narrative == nil {
+		return nil
+	}
+	date = strings.TrimSpace(date)
+	signature = strings.TrimSpace(signature)
+	if date == "" || signature == "" {
+		return nil
+	}
+
+	payload := dailyReportNarrativeCachePayload{
+		Signature:    signature,
+		Overview:     narrative.Overview,
+		RiskReview:   narrative.RiskReview,
+		TrendOutlook: narrative.TrendOutlook,
+		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode daily report narrative cache: %w", err)
+	}
+	return s.settingsRepo.Set(ctx, dailyReportNarrativeCacheKey(date), string(data))
+}
+
+func dailyReportNarrativeCacheKey(date string) string {
+	return dailyReportNarrativeCacheKeyPrefix + strings.TrimSpace(date)
 }
 
 func topStoredAnalyses(items []model.StoredAIAnalysis, limit int) []model.StoredAIAnalysis {
@@ -869,6 +1449,48 @@ func topStoredAnalyses(items []model.StoredAIAnalysis, limit int) []model.Stored
 		cloned = cloned[:limit]
 	}
 	return cloned
+}
+
+func (s *aiService) attachFocusTags(ctx context.Context, items []model.StoredAIAnalysis) ([]model.StoredAIAnalysis, error) {
+	if len(items) == 0 || s.focusTagRepo == nil {
+		return items, nil
+	}
+
+	entryIDs := make([]int64, 0, len(items))
+	for _, item := range items {
+		if item.EntryID != 0 {
+			entryIDs = append(entryIDs, item.EntryID)
+		}
+	}
+
+	tagMap, err := s.focusTagRepo.ListByEntryIDs(ctx, entryIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for index := range items {
+		if tags, ok := tagMap[items[index].EntryID]; ok {
+			items[index].FocusTags = append([]string(nil), tags...)
+		} else if items[index].FocusTags == nil {
+			items[index].FocusTags = []string{}
+		}
+	}
+
+	return items, nil
+}
+
+func filterFocusedAnalyses(items []model.StoredAIAnalysis) []model.StoredAIAnalysis {
+	if len(items) == 0 {
+		return []model.StoredAIAnalysis{}
+	}
+
+	result := make([]model.StoredAIAnalysis, 0, len(items))
+	for _, item := range items {
+		if item.Focused {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func buildTopCountItems(
@@ -1006,6 +1628,27 @@ func extractEntities(item model.StoredAIAnalysis) []string {
 	return result
 }
 
+func extractFocusTags(item model.StoredAIAnalysis) []string {
+	if len(item.FocusTags) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(item.FocusTags))
+	result := make([]string, 0, len(item.FocusTags))
+	for _, tag := range item.FocusTags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	return result
+}
+
 // TranslateBlocks parses HTML into blocks and translates them in parallel.
 // Returns block info, a channel of results, an error channel, and any initial error.
 func (s *aiService) TranslateBlocks(ctx context.Context, entryID int64, content, title string, isReadability bool) ([]TranslateBlockInfo, <-chan TranslateBlockResult, <-chan error, error) {
@@ -1119,7 +1762,7 @@ func (s *aiService) TranslateBlocks(ctx context.Context, entryID int64, content,
 				wrappedInput := ai.WrapInput(htmlForTranslation)
 
 				// Translate single block using non-streaming Complete
-				systemPrompt := ai.GetTranslateBlockPrompt(title, language)
+				systemPrompt := s.prompts().TranslateBlockPrompt(title, language)
 				translatedHTML, err := provider.Complete(ctx, systemPrompt, wrappedInput)
 				if err != nil {
 					select {
@@ -1132,6 +1775,7 @@ func (s *aiService) TranslateBlocks(ctx context.Context, entryID int64, content,
 
 				// Restore media elements from placeholders
 				translatedHTML = ai.RestoreMediaFromPlaceholders(translatedHTML, mediaElements)
+				s.recordAIUsageEstimate(aiSceneTranslation, systemPrompt, wrappedInput, translatedHTML)
 
 				// Send result
 				result := TranslateBlockResult{
@@ -1300,7 +1944,7 @@ func (s *aiService) TranslateBatch(ctx context.Context, articles []BatchArticleI
 						}
 						return
 					}
-					titlePrompt := ai.GetTranslateTextPrompt("title", language)
+					titlePrompt := s.prompts().TranslateTextPrompt("title", language)
 					wrappedTitle := ai.WrapInput(a.Title)
 					translated, err := provider.Complete(ctx, titlePrompt, wrappedTitle)
 					if err != nil {
@@ -1310,6 +1954,7 @@ func (s *aiService) TranslateBatch(ctx context.Context, articles []BatchArticleI
 						}
 						return
 					}
+					s.recordAIUsageEstimate(aiSceneTranslation, titlePrompt, wrappedTitle, translated)
 					translatedTitle = &translated
 					titleStr = translated
 				}
@@ -1327,7 +1972,7 @@ func (s *aiService) TranslateBatch(ctx context.Context, articles []BatchArticleI
 						}
 						return
 					}
-					summaryPrompt := ai.GetTranslateTextPrompt("summary", language)
+					summaryPrompt := s.prompts().TranslateTextPrompt("summary", language)
 					wrappedSummary := ai.WrapInput(a.Summary)
 					translated, err := provider.Complete(ctx, summaryPrompt, wrappedSummary)
 					if err != nil {
@@ -1337,6 +1982,7 @@ func (s *aiService) TranslateBatch(ctx context.Context, articles []BatchArticleI
 						}
 						return
 					}
+					s.recordAIUsageEstimate(aiSceneTranslation, summaryPrompt, wrappedSummary, translated)
 					translatedSummary = &translated
 					summaryStr = translated
 				}
@@ -1408,6 +2054,7 @@ func buildDailyReportNarrativeInput(report *model.AIDailyReport) (string, error)
 		FeedTitle   string   `json:"feedTitle"`
 		Title       string   `json:"title"`
 		Tag         string   `json:"tag"`
+		FocusTags   []string `json:"focusTags,omitempty"`
 		Summary     string   `json:"summary"`
 		Entities    []string `json:"entities"`
 		Sentiment   string   `json:"sentiment"`
@@ -1420,6 +2067,7 @@ func buildDailyReportNarrativeInput(report *model.AIDailyReport) (string, error)
 		narrativeItem := narrativeAnalysisItem{
 			FeedTitle:  item.FeedTitle,
 			Tag:        item.Tag,
+			FocusTags:  append([]string(nil), item.FocusTags...),
 			Summary:    item.Summary,
 			Entities:   append([]string(nil), item.Entities...),
 			Sentiment:  item.Sentiment,
@@ -1434,14 +2082,37 @@ func buildDailyReportNarrativeInput(report *model.AIDailyReport) (string, error)
 		analyses = append(analyses, narrativeItem)
 	}
 
+	focusedAnalyses := make([]narrativeAnalysisItem, 0, len(report.FocusedItems))
+	for _, item := range report.FocusedItems {
+		narrativeItem := narrativeAnalysisItem{
+			FeedTitle:  item.FeedTitle,
+			Tag:        item.Tag,
+			FocusTags:  append([]string(nil), item.FocusTags...),
+			Summary:    item.Summary,
+			Entities:   append([]string(nil), item.Entities...),
+			Sentiment:  item.Sentiment,
+			Importance: item.Importance,
+		}
+		if item.EntryTitle != nil {
+			narrativeItem.Title = strings.TrimSpace(*item.EntryTitle)
+		}
+		if item.PublishedAt != nil {
+			narrativeItem.PublishedAt = item.PublishedAt.Format(time.RFC3339)
+		}
+		focusedAnalyses = append(focusedAnalyses, narrativeItem)
+	}
+
 	payload := map[string]any{
-		"date":        report.Date,
-		"total":       report.Total,
-		"sentiment":   report.Sentiment,
-		"topTags":     report.TopTags,
-		"topEntities": report.TopEntities,
-		"topFeeds":    report.TopFeeds,
-		"topAnalyses": analyses,
+		"date":         report.Date,
+		"total":        report.Total,
+		"focusedTotal": report.FocusedTotal,
+		"sentiment":    report.Sentiment,
+		"topTags":      report.TopTags,
+		"topEntities":  report.TopEntities,
+		"topFeeds":     report.TopFeeds,
+		"topAnalyses":  analyses,
+		"focusedTags":  report.FocusedTags,
+		"focusedItems": focusedAnalyses,
 	}
 
 	encoded, err := json.Marshal(payload)
@@ -1685,7 +2356,7 @@ func (s *aiService) enrichAnalysisCoordinates(ctx context.Context, analysis *mod
 		return fmt.Errorf("rate limit: %w", err)
 	}
 
-	raw, err := provider.Complete(ctx, ai.GetCoordinateLookupPrompt(), ai.WrapInput(input))
+	raw, err := provider.Complete(ctx, s.prompts().CoordinateLookupPrompt(), ai.WrapInput(input))
 	if err != nil {
 		return err
 	}

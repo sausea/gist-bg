@@ -71,6 +71,36 @@ func (mr *MockSettingsServiceMockRecorder) GetAISettings(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAISettings", reflect.TypeOf((*MockSettingsService)(nil).GetAISettings), ctx)
 }
 
+// GetAIPromptSettings mocks base method.
+func (m *MockSettingsService) GetAIPromptSettings(ctx context.Context) (*service.AIPromptSettings, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAIPromptSettings", ctx)
+	ret0, _ := ret[0].(*service.AIPromptSettings)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAIPromptSettings indicates an expected call of GetAIPromptSettings.
+func (mr *MockSettingsServiceMockRecorder) GetAIPromptSettings(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAIPromptSettings", reflect.TypeOf((*MockSettingsService)(nil).GetAIPromptSettings), ctx)
+}
+
+// GetAIUsageStats mocks base method.
+func (m *MockSettingsService) GetAIUsageStats(ctx context.Context, days int) (*service.AIUsageStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAIUsageStats", ctx, days)
+	ret0, _ := ret[0].(*service.AIUsageStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAIUsageStats indicates an expected call of GetAIUsageStats.
+func (mr *MockSettingsServiceMockRecorder) GetAIUsageStats(ctx, days any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAIUsageStats", reflect.TypeOf((*MockSettingsService)(nil).GetAIUsageStats), ctx, days)
+}
+
 // GetAppearanceSettings mocks base method.
 func (m *MockSettingsService) GetAppearanceSettings(ctx context.Context) (*service.AppearanceSettings, error) {
 	m.ctrl.T.Helper()
@@ -184,6 +214,20 @@ func (m *MockSettingsService) SetAISettings(ctx context.Context, settings *servi
 func (mr *MockSettingsServiceMockRecorder) SetAISettings(ctx, settings any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAISettings", reflect.TypeOf((*MockSettingsService)(nil).SetAISettings), ctx, settings)
+}
+
+// SetAIPromptSettings mocks base method.
+func (m *MockSettingsService) SetAIPromptSettings(ctx context.Context, settings *service.AIPromptSettings) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetAIPromptSettings", ctx, settings)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetAIPromptSettings indicates an expected call of SetAIPromptSettings.
+func (mr *MockSettingsServiceMockRecorder) SetAIPromptSettings(ctx, settings any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAIPromptSettings", reflect.TypeOf((*MockSettingsService)(nil).SetAIPromptSettings), ctx, settings)
 }
 
 // SetAppearanceSettings mocks base method.

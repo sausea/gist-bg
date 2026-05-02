@@ -94,6 +94,7 @@ export function useAddFeed(contentType: ContentType = 'article'): UseAddFeedRetu
       await queryClient.invalidateQueries({ queryKey: ['feeds'] })
       await queryClient.invalidateQueries({ queryKey: ['entries'] })
       await queryClient.invalidateQueries({ queryKey: ['unreadCounts'] })
+      await queryClient.invalidateQueries({ queryKey: ['feedAIStats'] })
       return true
     } catch (err) {
       if (err instanceof ApiError && err.message === 'feed_exists') {

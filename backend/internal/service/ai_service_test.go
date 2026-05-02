@@ -590,23 +590,21 @@ func TestAIService_Analyze_ArchivesMarkdownByDateFolderAndFeed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, analysis)
 
-	expectedFile := filepath.Join(
-		archiveDir,
-		time.Now().In(time.Local).Format("20060102"),
-		"CnNews",
-		"俄罗斯卫星通信社",
-		"美联储信号带动市场上涨.md",
-	)
+	expectedFile := filepath.Join(archiveDir, time.Now().In(time.Local).Format("20060102")+".md")
 
 	data, err := os.ReadFile(expectedFile)
 	require.NoError(t, err)
 	content := string(data)
-	require.Contains(t, content, "# 美联储信号带动市场上涨")
+	require.Contains(t, content, "# "+time.Now().In(time.Local).Format("2006-01-02")+" AI 分析归档")
+	require.Contains(t, content, "## 归档条目")
+	require.Contains(t, content, "### CnNews")
+	require.Contains(t, content, "#### 俄罗斯卫星通信社")
+	require.Contains(t, content, "##### 美联储信号带动市场上涨")
 	require.Contains(t, content, "- Feed: 俄罗斯卫星通信社")
 	require.Contains(t, content, "- Original Title: Nguyen Xuan Phuc elected president")
-	require.Contains(t, content, "## 摘要")
+	require.Contains(t, content, "**摘要**")
 	require.Contains(t, content, "summary")
-	require.Contains(t, content, "## 标签")
+	require.Contains(t, content, "**标签**")
 	require.Contains(t, content, "#全球/美国/美联储")
 }
 
@@ -663,18 +661,14 @@ func TestAIService_GetCachedAnalysis_ArchivesMarkdownOnCacheHit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, analysis)
 
-	expectedFile := filepath.Join(
-		archiveDir,
-		time.Now().In(time.Local).Format("20060102"),
-		"CnNews",
-		"俄罗斯卫星通信社",
-		"阮春福当选国家主席.md",
-	)
+	expectedFile := filepath.Join(archiveDir, time.Now().In(time.Local).Format("20060102")+".md")
 
 	data, err := os.ReadFile(expectedFile)
 	require.NoError(t, err)
 	content := string(data)
-	require.Contains(t, content, "# 阮春福当选国家主席")
+	require.Contains(t, content, "### CnNews")
+	require.Contains(t, content, "#### 俄罗斯卫星通信社")
+	require.Contains(t, content, "##### 阮春福当选国家主席")
 	require.Contains(t, content, "- Entry ID: ")
 	require.Contains(t, content, "- Original Title: Nguyen Xuan Phuc elected president")
 	require.Contains(t, content, "cached summary")
@@ -732,16 +726,12 @@ func TestAIService_Analyze_ArchivesMarkdownUsingFolderArchiveDir(t *testing.T) {
 	_, err = svc.Analyze(context.Background(), entryID, "<p>Markets moved higher.</p>", originalTitle, false)
 	require.NoError(t, err)
 
-	expectedFile := filepath.Join(
-		rootFolder.AnalysisArchiveDir,
-		time.Now().In(time.Local).Format("20060102"),
-		"俄罗斯卫星通信社",
-		"美联储信号带动市场上涨.md",
-	)
+	expectedFile := filepath.Join(rootFolder.AnalysisArchiveDir, time.Now().In(time.Local).Format("20060102")+".md")
 
 	data, err := os.ReadFile(expectedFile)
 	require.NoError(t, err)
-	require.Contains(t, string(data), "# 美联储信号带动市场上涨")
+	require.Contains(t, string(data), "### 俄罗斯卫星通信社")
+	require.Contains(t, string(data), "#### 美联储信号带动市场上涨")
 }
 
 func TestAIService_Analyze_ArchivesMarkdownUsingNearestParentFolderArchiveDir(t *testing.T) {
@@ -795,17 +785,84 @@ func TestAIService_Analyze_ArchivesMarkdownUsingNearestParentFolderArchiveDir(t 
 	_, err := svc.Analyze(context.Background(), entryID, "<p>Markets moved higher.</p>", originalTitle, false)
 	require.NoError(t, err)
 
-	expectedFile := filepath.Join(
-		parentArchiveDir,
-		time.Now().In(time.Local).Format("20060102"),
-		"国际",
-		"俄罗斯卫星通信社",
-		"美联储信号带动市场上涨.md",
-	)
+	expectedFile := filepath.Join(parentArchiveDir, time.Now().In(time.Local).Format("20060102")+".md")
 
 	data, err := os.ReadFile(expectedFile)
 	require.NoError(t, err)
-	require.Contains(t, string(data), "# 美联储信号带动市场上涨")
+	require.Contains(t, string(data), "### 国际")
+	require.Contains(t, string(data), "#### 俄罗斯卫星通信社")
+	require.Contains(t, string(data), "##### 美联储信号带动市场上涨")
+}
+
+func TestAIService_PublishDailyArchiveReport_PrependsReportToDailyFile(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	settingsRepo := repository.NewSettingsRepository(db)
+	listRepo := repository.NewAIListTranslationRepository(db)
+	analysisRepo := repository.NewAIAnalysisRepository(db)
+	entryRepo := repository.NewEntryRepository(db)
+	feedRepo := repository.NewFeedRepository(db)
+	folderRepo := repository.NewFolderRepository(db)
+
+	testutil.SeedSetting(t, db, service.KeyAISummaryLanguage, "en-US")
+
+	rootFolderID := testutil.SeedFolder(t, db, "CnNews", nil, "article")
+	feedID := testutil.SeedFeed(t, db, model.Feed{
+		Title:    "俄罗斯卫星通信社",
+		URL:      "https://example.com/feed",
+		FolderID: &rootFolderID,
+	})
+
+	originalTitle := "Nguyen Xuan Phuc elected president"
+	entryURL := "https://example.com/article/1"
+	entryID := testutil.SeedEntry(t, db, model.Entry{
+		FeedID: feedID,
+		Title:  &originalTitle,
+		URL:    &entryURL,
+	})
+
+	require.NoError(t, listRepo.Save(context.Background(), entryID, "zh-CN", "阮春福当选国家主席", ""))
+	require.NoError(t, analysisRepo.Save(context.Background(), entryID, false, "en-US", model.AIAnalysis{
+		Tag:        "#东南亚/越南/政治",
+		Summary:    "cached summary",
+		Entities:   []string{"阮春福", "越南"},
+		Sentiment:  "neutral",
+		Importance: 7,
+	}))
+
+	archiveDir := t.TempDir()
+	svc := service.NewAIService(
+		&summaryRepoStub{},
+		&translationRepoStub{},
+		listRepo,
+		analysisRepo,
+		settingsRepo,
+		ai.NewRateLimiter(100),
+		service.WithAIAnalysisArchive(archiveDir, entryRepo, feedRepo, folderRepo),
+	)
+
+	analysis, err := svc.GetCachedAnalysis(context.Background(), entryID, false)
+	require.NoError(t, err)
+	require.NotNil(t, analysis)
+
+	filePath := filepath.Join(archiveDir, time.Now().In(time.Local).Format("20060102")+".md")
+	beforeData, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.NotContains(t, string(beforeData), "## AI 日报")
+
+	publisher, ok := svc.(interface {
+		PublishDailyArchiveReport(ctx context.Context, day time.Time) error
+	})
+	require.True(t, ok)
+	require.NoError(t, publisher.PublishDailyArchiveReport(context.Background(), time.Now().In(time.Local)))
+
+	afterData, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	content := string(afterData)
+	require.Contains(t, content, "## AI 日报")
+	require.Contains(t, content, "- 分析总数: 1")
+	require.Contains(t, content, "## 归档条目")
+	require.Contains(t, content, "##### 阮春福当选国家主席")
+	require.Less(t, strings.Index(content, "## AI 日报"), strings.Index(content, "## 归档条目"))
 }
 
 func TestAIService_BuildDailyAnalysisReport_Success(t *testing.T) {
@@ -873,6 +930,136 @@ func TestAIService_BuildDailyAnalysisReport_Success(t *testing.T) {
 	require.Equal(t, 2, report.TopFeeds[0].Count)
 	require.Equal(t, time.Date(2026, 3, 30, 0, 0, 0, 0, day.Location()), analysisRepo.rangeStart)
 	require.Equal(t, time.Date(2026, 3, 31, 0, 0, 0, 0, day.Location()), analysisRepo.rangeEnd)
+}
+
+func TestAIService_BuildDailyAnalysisReport_CachesNarrative(t *testing.T) {
+	server, requestCount := newAIDailyReportTestServer(t)
+	defer server.Close()
+
+	repo := newSettingsRepoStub()
+	repo.data["ai.report.provider"] = "openai"
+	repo.data["ai.report.api_key"] = "test-key"
+	repo.data["ai.report.base_url"] = server.URL + "/v1"
+	repo.data["ai.report.model"] = "gpt-4o-mini"
+
+	day := time.Date(2026, 3, 30, 16, 45, 0, 0, time.FixedZone("CST", 8*3600))
+	analysisRepo := &analysisRepoStub{
+		rangeResult: []model.StoredAIAnalysis{
+			{
+				ID:         1,
+				EntryID:    101,
+				FeedID:     201,
+				FeedTitle:  "World Feed",
+				Tag:        "#全球/美国/关税",
+				Entities:   []string{"美国", "关税"},
+				Sentiment:  "positive",
+				Importance: 9,
+				CreatedAt:  day.Add(-time.Hour),
+			},
+			{
+				ID:         2,
+				EntryID:    102,
+				FeedID:     202,
+				FeedTitle:  "Tech Feed",
+				Tag:        "#AI/芯片/美国",
+				Entities:   []string{"芯片", "美国"},
+				Sentiment:  "neutral",
+				Importance: 7,
+				CreatedAt:  day.Add(-30 * time.Minute),
+			},
+		},
+	}
+
+	svc := service.NewAIService(&summaryRepoStub{}, &translationRepoStub{}, &listTranslationRepoStub{}, analysisRepo, repo, ai.NewRateLimiter(100))
+
+	report1, err := svc.BuildDailyAnalysisReport(context.Background(), day)
+	require.NoError(t, err)
+	require.NotNil(t, report1)
+	require.Equal(t, "今日热点综述-1", report1.Overview)
+	require.Equal(t, "风险点评-1", report1.RiskReview)
+	require.Equal(t, "趋势判断-1", report1.TrendOutlook)
+	require.Equal(t, int32(1), requestCount.Load())
+
+	svcCached := service.NewAIService(&summaryRepoStub{}, &translationRepoStub{}, &listTranslationRepoStub{}, analysisRepo, repo, ai.NewRateLimiter(100))
+
+	report2, err := svcCached.BuildDailyAnalysisReport(context.Background(), day)
+	require.NoError(t, err)
+	require.NotNil(t, report2)
+	require.Equal(t, "今日热点综述-1", report2.Overview)
+	require.Equal(t, int32(1), requestCount.Load())
+
+	analysisRepo.rangeResult = append(analysisRepo.rangeResult, model.StoredAIAnalysis{
+		ID:         3,
+		EntryID:    103,
+		FeedID:     203,
+		FeedTitle:  "Macro Feed",
+		Tag:        "#全球/能源/油价",
+		Entities:   []string{"油价", "能源"},
+		Sentiment:  "negative",
+		Importance: 8,
+		CreatedAt:  day.Add(-10 * time.Minute),
+	})
+
+	report3, err := svcCached.BuildDailyAnalysisReport(context.Background(), day)
+	require.NoError(t, err)
+	require.NotNil(t, report3)
+	require.Equal(t, 3, report3.Total)
+	require.Equal(t, "今日热点综述-2", report3.Overview)
+	require.Equal(t, "风险点评-2", report3.RiskReview)
+	require.Equal(t, "趋势判断-2", report3.TrendOutlook)
+	require.Equal(t, int32(2), requestCount.Load())
+}
+
+func newAIDailyReportTestServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/responses", r.URL.Path)
+
+		call := requestCount.Add(1)
+		responseText := `{"overview":"今日热点综述-1","riskReview":"风险点评-1","trendOutlook":"趋势判断-1"}`
+		if call >= 2 {
+			responseText = `{"overview":"今日热点综述-2","riskReview":"风险点评-2","trendOutlook":"趋势判断-2"}`
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"id":                 "resp-daily-1",
+			"created_at":         1,
+			"error":              map[string]any{"code": "server_error", "message": ""},
+			"incomplete_details": map[string]any{"reason": ""},
+			"instructions":       "",
+			"metadata":           map[string]any{},
+			"model":              "gpt-4o-mini",
+			"object":             "response",
+			"output": []any{
+				map[string]any{
+					"id":     "item-1",
+					"type":   "message",
+					"role":   "assistant",
+					"status": "completed",
+					"content": []any{
+						map[string]any{
+							"type":        "output_text",
+							"text":        responseText,
+							"annotations": []any{},
+						},
+					},
+				},
+			},
+			"parallel_tool_calls": true,
+			"temperature":         1,
+			"tool_choice":         "auto",
+			"tools":               []any{},
+			"top_p":               1,
+			"max_output_tokens":   0,
+			"max_tool_calls":      0,
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+
+	return server, &requestCount
 }
 
 func newAIAnalyzeTestServer(t *testing.T) (*httptest.Server, *atomic.Int32) {

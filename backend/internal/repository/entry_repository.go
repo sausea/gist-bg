@@ -28,6 +28,12 @@ type UnreadCount struct {
 	Count  int
 }
 
+type FeedAIStat struct {
+	FeedID        int64
+	UnreadCount   int
+	AnalyzedCount int
+}
+
 type EntryRepository interface {
 	GetByID(ctx context.Context, id int64) (model.Entry, error)
 	List(ctx context.Context, filter EntryListFilter) ([]model.Entry, error)
@@ -36,6 +42,7 @@ type EntryRepository interface {
 	UpdateReadableContent(ctx context.Context, id int64, content string) error
 	MarkAllAsRead(ctx context.Context, feedID *int64, folderID *int64, contentType *string) error
 	GetAllUnreadCounts(ctx context.Context) ([]UnreadCount, error)
+	GetFeedAIStats(ctx context.Context) ([]FeedAIStat, error)
 	GetStarredCount(ctx context.Context) (int, error)
 	CreateOrUpdate(ctx context.Context, entry model.Entry) error
 	ExistsByHash(ctx context.Context, feedID int64, hash string) (bool, error)
@@ -55,8 +62,33 @@ func NewEntryRepository(db dbtx) EntryRepository {
 func (r *entryRepository) GetByID(ctx context.Context, id int64) (model.Entry, error) {
 	row := r.db.QueryRowContext(
 		ctx,
-		`SELECT id, feed_id, hash, title, url, content, readable_content, thumbnail_url, author, published_at, read, starred, created_at, updated_at
-		 FROM entries WHERE id = ?`,
+		`SELECT
+			e.id,
+			e.feed_id,
+			e.hash,
+			e.title,
+			e.url,
+			e.content,
+			e.readable_content,
+			e.thumbnail_url,
+			e.author,
+			e.published_at,
+			e.read,
+			e.starred,
+			CASE
+				WHEN EXISTS (SELECT 1 FROM ai_analyses a WHERE a.entry_id = e.id)
+					OR EXISTS (
+						SELECT 1 FROM ai_analysis_jobs j
+						WHERE j.entry_id = e.id AND j.status = ?
+					)
+				THEN 1
+				ELSE 0
+			END AS has_analysis,
+			e.created_at,
+			e.updated_at
+		 FROM entries e
+		 WHERE e.id = ?`,
+		model.AIAnalysisJobStatusSucceeded,
 		id,
 	)
 	return scanEntry(row)
@@ -65,11 +97,34 @@ func (r *entryRepository) GetByID(ctx context.Context, id int64) (model.Entry, e
 func (r *entryRepository) List(ctx context.Context, filter EntryListFilter) ([]model.Entry, error) {
 	var args []interface{}
 	query := `
-		SELECT e.id, e.feed_id, e.hash, e.title, e.url, e.content, e.readable_content, e.thumbnail_url, e.author,
-		       e.published_at, e.read, e.starred, e.created_at, e.updated_at
+		SELECT
+			e.id,
+			e.feed_id,
+			e.hash,
+			e.title,
+			e.url,
+			e.content,
+			e.readable_content,
+			e.thumbnail_url,
+			e.author,
+			e.published_at,
+			e.read,
+			e.starred,
+			CASE
+				WHEN EXISTS (SELECT 1 FROM ai_analyses a WHERE a.entry_id = e.id)
+					OR EXISTS (
+						SELECT 1 FROM ai_analysis_jobs j
+						WHERE j.entry_id = e.id AND j.status = ?
+					)
+				THEN 1
+				ELSE 0
+			END AS has_analysis,
+			e.created_at,
+			e.updated_at
 		FROM entries e
 	`
 
+	args = append(args, model.AIAnalysisJobStatusSucceeded)
 	var conditions []string
 	needFeedsJoin := filter.FolderID != nil || filter.ContentType != nil
 
@@ -228,6 +283,49 @@ func (r *entryRepository) GetAllUnreadCounts(ctx context.Context) ([]UnreadCount
 	return counts, nil
 }
 
+func (r *entryRepository) GetFeedAIStats(ctx context.Context) ([]FeedAIStat, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		`WITH analyzed_entries AS (
+			SELECT DISTINCT entry_id
+			FROM ai_analyses
+		)
+		SELECT
+			e.feed_id,
+			COUNT(*) AS unread_count,
+			COALESCE(SUM(CASE
+				WHEN a.entry_id IS NOT NULL OR j.status = ? THEN 1
+				ELSE 0
+			END), 0) AS analyzed_count
+		FROM entries e
+		LEFT JOIN analyzed_entries a ON a.entry_id = e.id
+		LEFT JOIN ai_analysis_jobs j ON j.entry_id = e.id
+		WHERE e.read = 0
+		GROUP BY e.feed_id
+		ORDER BY e.feed_id`,
+		model.AIAnalysisJobStatusSucceeded,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []FeedAIStat
+	for rows.Next() {
+		var stat FeedAIStat
+		if err := rows.Scan(&stat.FeedID, &stat.UnreadCount, &stat.AnalyzedCount); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
 // entryScanner is an interface for scanning entry rows.
 type entryScanner interface {
 	Scan(dest ...interface{}) error
@@ -237,11 +335,11 @@ func scanEntry(s entryScanner) (model.Entry, error) {
 	var e model.Entry
 	var publishedAt sql.NullString
 	var createdAt, updatedAt string
-	var readInt, starredInt int
+	var readInt, starredInt, hasAnalysisInt int
 
 	err := s.Scan(
 		&e.ID, &e.FeedID, &e.Hash, &e.Title, &e.URL, &e.Content, &e.ReadableContent, &e.ThumbnailURL, &e.Author,
-		&publishedAt, &readInt, &starredInt, &createdAt, &updatedAt,
+		&publishedAt, &readInt, &starredInt, &hasAnalysisInt, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return model.Entry{}, err
@@ -249,6 +347,7 @@ func scanEntry(s entryScanner) (model.Entry, error) {
 
 	e.Read = readInt == 1
 	e.Starred = starredInt == 1
+	e.HasAnalysis = hasAnalysisInt == 1
 	if publishedAt.Valid {
 		e.PublishedAt = parseTimePtr(publishedAt.String)
 	}

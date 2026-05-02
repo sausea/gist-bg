@@ -32,13 +32,16 @@ export const EntryListItem = forwardRef<HTMLDivElement, EntryListItemProps>(
     },
     ref
   ) {
-  const { t } = useTranslation()
-  const publishedAt = entry.publishedAt ? formatRelativeTime(entry.publishedAt, t) : null
-  const [iconError, setIconError] = useState(false)
-  const showIcon = feed?.iconPath && !iconError
-  const fallbackTitle = t('entry.untitled')
-  const fallbackFeedName = t('entry.unknown_feed')
-
+    const { t } = useTranslation()
+    const publishedAt = entry.publishedAt ? formatRelativeTime(entry.publishedAt, t) : null
+    const [iconError, setIconError] = useState(false)
+    const showIcon = feed?.iconPath && !iconError
+    const fallbackTitle = t('entry.untitled')
+    const fallbackFeedName = t('entry.unknown_feed')
+    const hasAnalysis = Boolean(entry.hasAnalysis)
+    const analysisStatusLabel = hasAnalysis
+      ? t('entry.analysis_status_done')
+      : t('entry.analysis_status_pending')
 
     // Get translation from store
     const translation = useTranslationStore((state) =>
@@ -92,13 +95,23 @@ export const EntryListItem = forwardRef<HTMLDivElement, EntryListItemProps>(
         </div>
 
         {/* Line 2: title */}
-        <div
-          className={cn(
-            'mt-1 text-sm line-clamp-2',
-            !entry.read ? 'font-semibold' : 'font-medium text-muted-foreground'
-          )}
-        >
-          {entry.title || fallbackTitle}
+        <div className="mt-1 flex items-start gap-2">
+          <span
+            className={cn(
+              'mt-1 size-2 shrink-0 rounded-full',
+              hasAnalysis ? 'bg-green-500' : 'bg-red-500'
+            )}
+            title={analysisStatusLabel}
+            aria-label={analysisStatusLabel}
+          />
+          <div
+            className={cn(
+              'min-w-0 flex-1 text-sm line-clamp-2',
+              !entry.read ? 'font-semibold' : 'font-medium text-muted-foreground'
+            )}
+          >
+            {entry.title || fallbackTitle}
+          </div>
         </div>
 
         {/* Line 2.5: translated title */}

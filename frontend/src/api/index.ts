@@ -5,6 +5,7 @@ import type {
   EntryListParams,
   EntryListResponse,
   Feed,
+  FeedAIStatsResponse,
   FeedPreview,
   Folder,
   ImportTask,
@@ -13,7 +14,9 @@ import type {
   UnreadCountsResponse,
 } from "@/types/api";
 import type {
+  AIPromptSettings,
   AISettings,
+  AIUsageStats,
   AITestRequest,
   AITestResponse,
   AppearanceSettings,
@@ -520,6 +523,10 @@ export async function getUnreadCounts(): Promise<UnreadCountsResponse> {
   return request<UnreadCountsResponse>("/api/unread-counts");
 }
 
+export async function getFeedAIStats(): Promise<FeedAIStatsResponse> {
+  return request<FeedAIStatsResponse>("/api/feed-ai-stats");
+}
+
 export async function updateEntryStarred(
   id: string,
   starred: boolean,
@@ -535,6 +542,12 @@ export interface ExportEntryMarkdownResponse {
   savedAt: string;
 }
 
+export interface EntryFocus {
+  entryId: string;
+  focused: boolean;
+  tags: string[];
+}
+
 export async function exportEntryMarkdown(
   id: string,
   tags: string[],
@@ -547,6 +560,21 @@ export async function exportEntryMarkdown(
 
 export async function getStarredCount(): Promise<StarredCountResponse> {
   return request<StarredCountResponse>("/api/starred-count");
+}
+
+export async function getEntryFocus(id: string): Promise<EntryFocus> {
+  return request<EntryFocus>(`/api/entries/${id}/focus`);
+}
+
+export async function updateEntryFocus(
+  id: string,
+  focused: boolean,
+  tags: string[],
+): Promise<EntryFocus> {
+  return request<EntryFocus>(`/api/entries/${id}/focus`, {
+    method: "PUT",
+    body: JSON.stringify({ focused, tags }),
+  });
 }
 
 export async function startImportOPML(file: File): Promise<void> {
@@ -667,12 +695,34 @@ export async function getAISettings(): Promise<AISettings> {
   return request<AISettings>("/api/settings/ai");
 }
 
+export async function getAIUsageStats(days = 30): Promise<AIUsageStats> {
+  return request<AIUsageStats>(`/api/settings/ai/usage?days=${days}`);
+}
+
+export async function getAIPromptSettings(): Promise<AIPromptSettings> {
+  return request<AIPromptSettings>("/api/settings/ai/prompts");
+}
+
 export async function updateAISettings(
   settings: AISettings,
 ): Promise<AISettings> {
   return request<AISettings>("/api/settings/ai", {
     method: "PUT",
     body: JSON.stringify(settings),
+  });
+}
+
+export async function updateAIPromptSettings(
+  settings: AIPromptSettings,
+): Promise<AIPromptSettings> {
+  return request<AIPromptSettings>("/api/settings/ai/prompts", {
+    method: "PUT",
+    body: JSON.stringify({
+      templates: settings.templates.map((template) => ({
+        key: template.key,
+        content: template.content,
+      })),
+    }),
   });
 }
 
@@ -779,6 +829,8 @@ export interface StoredAIAnalysis {
   feedTitle: string;
   author?: string;
   publishedAt?: string;
+  focused: boolean;
+  focusTags: string[];
   isReadability: boolean;
   language: string;
   tag: string;
@@ -793,6 +845,37 @@ export interface StoredAIAnalysis {
 
 export interface StoredAIAnalysisListResponse {
   items: StoredAIAnalysis[];
+}
+
+export interface AIAnalysisQueueItem {
+  id: string;
+  entryId: string;
+  feedId: string;
+  feedType: ContentType;
+  entryTitle?: string;
+  entryUrl?: string;
+  feedTitle: string;
+  author?: string;
+  publishedAt?: string;
+  status: "queued" | "running" | "failed" | string;
+  source: "auto" | "manual" | string;
+  contentMode: "original" | "readability" | string;
+  language: string;
+  retryCount: number;
+  errorMessage?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  updatedAt: string;
+}
+
+export interface AIAnalysisQueueResponse {
+  pendingCount: number;
+  queuedCount: number;
+  runningCount: number;
+  failedCount: number;
+  processing: boolean;
+  items: AIAnalysisQueueItem[];
 }
 
 export interface AIDailyReportSentiment {
@@ -817,6 +900,7 @@ export interface AIDailyReport {
   date: string;
   total: number;
   pendingCount: number;
+  focusedTotal: number;
   overview?: string;
   riskReview?: string;
   trendOutlook?: string;
@@ -825,6 +909,8 @@ export interface AIDailyReport {
   topTags: AIDailyReportCountItem[];
   topEntities: AIDailyReportCountItem[];
   topFeeds: AIDailyReportFeedMetric[];
+  focusedTags: AIDailyReportCountItem[];
+  focusedItems: StoredAIAnalysis[];
 }
 
 export async function getAIProcessingStatus(
@@ -848,6 +934,20 @@ export async function listStoredAIAnalyses(
 
   return request<StoredAIAnalysisListResponse>(
     `/api/ai/analyses?${searchParams.toString()}`,
+    { signal },
+  );
+}
+
+export async function listAIAnalysisQueue(
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<AIAnalysisQueueResponse> {
+  const searchParams = new URLSearchParams({
+    limit: String(limit),
+  });
+
+  return request<AIAnalysisQueueResponse>(
+    `/api/ai/queue?${searchParams.toString()}`,
     { signal },
   );
 }

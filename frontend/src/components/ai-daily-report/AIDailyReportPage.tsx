@@ -87,6 +87,8 @@ export function AIDailyReportPage({
   const topTags = data?.topTags ?? [];
   const topEntities = data?.topEntities ?? [];
   const topFeeds = data?.topFeeds ?? [];
+  const focusedTags = data?.focusedTags ?? [];
+  const focusedItems = data?.focusedItems ?? [];
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
@@ -144,7 +146,7 @@ export function AIDailyReportPage({
 
         {!isLoading && !error && data && (
           <div className="space-y-6">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
               <div className="rounded-2xl border border-border/70 bg-card p-4">
                 <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                   {t("ai_daily_report_page.summary_date")}
@@ -172,6 +174,17 @@ export function AIDailyReportPage({
                   {data.pendingCount > 0
                     ? t("ai_daily_report_page.pending_hint_processing")
                     : t("ai_daily_report_page.pending_hint_idle")}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-border/70 bg-card p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  {t("ai_daily_report_page.focused_total")}
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-rose-600 dark:text-rose-300">
+                  {data.focusedTotal}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("ai_daily_report_page.focused_hint")}
                 </p>
               </div>
               <div className="rounded-2xl border border-border/70 bg-card p-4">
@@ -265,6 +278,11 @@ export function AIDailyReportPage({
                                 {t("entry.analysis_importance")}:{" "}
                                 {item.importance}
                               </span>
+                              {item.focused && (
+                                <span className="rounded-full bg-rose-500/10 px-2.5 py-1 text-rose-700 dark:text-rose-300">
+                                  {t("ai_daily_report_page.focused_badge")}
+                                </span>
+                              )}
                               {createdAt && (
                                 <span>
                                   {t("ai_analysis_page.generated_at")}:{" "}
@@ -288,6 +306,14 @@ export function AIDailyReportPage({
                                 <span className="rounded-full bg-lime-500/10 px-2.5 py-1 text-lime-700 dark:text-lime-300">
                                   {item.tag}
                                 </span>
+                                {(item.focusTags ?? []).map((tag) => (
+                                  <span
+                                    key={`${item.id}-${tag}`}
+                                    className="rounded-full bg-rose-500/10 px-2.5 py-1 text-rose-700 dark:text-rose-300"
+                                  >
+                                    #{tag}
+                                  </span>
+                                ))}
                                 <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">
                                   {t("entry.analysis_sentiment")}:{" "}
                                   {sentimentKey
@@ -308,6 +334,67 @@ export function AIDailyReportPage({
                 </section>
 
                 <aside className="space-y-4">
+                  <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
+                    <h2 className="text-base font-semibold text-foreground">
+                      {t("ai_daily_report_page.focused_items")}
+                    </h2>
+                    <div className="mt-4 space-y-3">
+                      {focusedItems.length > 0 ? (
+                        focusedItems.map((item) => (
+                          <button
+                            key={`focused-${item.id}`}
+                            type="button"
+                            onClick={() => openEntry(item)}
+                            className="w-full rounded-xl border border-border/70 bg-background px-3 py-3 text-left transition-colors hover:bg-accent/20"
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span className="rounded-full bg-rose-500/10 px-2 py-1 text-rose-700 dark:text-rose-300">
+                                {item.feedTitle}
+                              </span>
+                              <span>{t("entry.analysis_importance")}: {item.importance}</span>
+                            </div>
+                            <div className="mt-2 line-clamp-2 text-sm font-medium text-foreground">
+                              {item.entryTitle || t("entry.untitled")}
+                            </div>
+                            {(item.focusTags ?? []).length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                {(item.focusTags ?? []).map((tag) => (
+                                  <span
+                                    key={`focused-${item.id}-${tag}`}
+                                    className="rounded-full bg-primary/10 px-2 py-1 text-primary"
+                                  >
+                                    #{tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {t("entry.analysis_none")}
+                        </p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
+                    <h2 className="text-base font-semibold text-foreground">
+                      {t("ai_daily_report_page.focused_tags")}
+                    </h2>
+                    <div className="mt-4 space-y-2">
+                      {focusedTags.length > 0 ? (
+                        focusedTags.map((item) => (
+                          <MetricPill key={`focused-tag-${item.name}`} item={item} />
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {t("entry.analysis_none")}
+                        </p>
+                      )}
+                    </div>
+                  </section>
+
                   <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
                     <h2 className="text-base font-semibold text-foreground">
                       {t("ai_daily_report_page.top_tags")}

@@ -595,7 +595,7 @@ info:
   contact: {}
   description: This is a modern RSS reader API.
   title: Gist API
-  version: "1.0"
+  version: "1.0.1"
 paths:
   /ai/cache:
     delete:

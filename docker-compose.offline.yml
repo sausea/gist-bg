@@ -1,6 +1,6 @@
 services:
   gist:
-    image: gist:offline-amd64
+    image: ${GIST_IMAGE:-gist:offline-amd64}
     container_name: gist
     ports:
       - "8080:8080"
@@ -12,4 +12,3 @@ services:
       - GIST_EXPORT_DIR=/app/data
       # - GIST_SWAGGER=true  # Enable Swagger API docs at /swagger/index.html
     restart: always
-

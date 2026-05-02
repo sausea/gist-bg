@@ -7,7 +7,7 @@ import (
 
 const (
 	AppName    = "Gist"
-	AppVersion = "1.0.0"
+	AppVersion = "1.0.1"
 	AppRepo    = "https://github.com/9bingyin/Gist"
 )
 
@@ -28,6 +28,7 @@ type Config struct {
 	DBPath        string
 	DataDir       string
 	ExportDir     string
+	PromptsDir    string
 	StaticDir     string
 	LogLevel      string
 	EnableSwagger bool
@@ -56,6 +57,11 @@ func Load() Config {
 		exportDir = filepath.Join(dataDir, "exports")
 	}
 
+	promptsDir := os.Getenv("GIST_PROMPTS_DIR")
+	if promptsDir == "" {
+		promptsDir = filepath.Join(dataDir, "prompts")
+	}
+
 	logLevel := os.Getenv("GIST_LOG_LEVEL")
 	if logLevel == "" {
 		logLevel = "info"
@@ -68,6 +74,7 @@ func Load() Config {
 		DBPath:        filepath.Clean(path),
 		DataDir:       filepath.Clean(dataDir),
 		ExportDir:     filepath.Clean(exportDir),
+		PromptsDir:    filepath.Clean(promptsDir),
 		StaticDir:     filepath.Clean(staticDir),
 		LogLevel:      logLevel,
 		EnableSwagger: enableSwagger,

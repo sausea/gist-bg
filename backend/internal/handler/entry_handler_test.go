@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"gist/backend/internal/handler"
+	"gist/backend/internal/service"
 	"net/http"
 	"testing"
 
@@ -26,8 +27,8 @@ func TestEntryHandler_List_Success(t *testing.T) {
 	title1 := "Entry 1"
 	title2 := "Entry 2"
 	entries := []model.Entry{
-		{ID: 1, Title: &title1},
-		{ID: 2, Title: &title2},
+		{ID: 1, Title: &title1, HasAnalysis: true},
+		{ID: 2, Title: &title2, HasAnalysis: false},
 	}
 
 	mockService.EXPECT().
@@ -40,6 +41,8 @@ func TestEntryHandler_List_Success(t *testing.T) {
 	var resp handler.EntryListResponse
 	assertJSONResponse(t, rec, http.StatusOK, &resp)
 	require.Len(t, resp.Entries, 2)
+	require.True(t, resp.Entries[0].HasAnalysis)
+	require.False(t, resp.Entries[1].HasAnalysis)
 	require.False(t, resp.HasMore, "should not have more with 2 entries when limit is 10")
 }
 
@@ -91,8 +94,9 @@ func TestEntryHandler_GetByID_Success(t *testing.T) {
 
 	title := "Test Entry"
 	entry := model.Entry{
-		ID:    123,
-		Title: &title,
+		ID:          123,
+		Title:       &title,
+		HasAnalysis: true,
 	}
 
 	mockService.EXPECT().
@@ -107,6 +111,33 @@ func TestEntryHandler_GetByID_Success(t *testing.T) {
 	require.Equal(t, "123", resp.ID)
 	require.NotNil(t, resp.Title)
 	require.Equal(t, "Test Entry", *resp.Title)
+	require.True(t, resp.HasAnalysis)
+}
+
+func TestEntryHandler_GetFocus_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockEntryService(ctrl)
+	h := handler.NewEntryHandlerHelper(mockService, nil, nil)
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/entries/123/focus", nil)
+	c, rec := newTestContext(e, req)
+	setPathParams(c, map[string]string{"id": "123"})
+
+	mockService.EXPECT().
+		GetFocus(gomock.Any(), int64(123)).
+		Return(model.EntryFocus{EntryID: 123, Focused: true, Tags: []string{"军工", "欧洲"}}, nil)
+
+	err := h.GetFocus(c)
+	require.NoError(t, err)
+
+	var resp handler.EntryFocusResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, "123", resp.EntryID)
+	require.True(t, resp.Focused)
+	require.Equal(t, []string{"军工", "欧洲"}, resp.Tags)
 }
 
 func TestEntryHandler_UpdateRead_Success(t *testing.T) {
@@ -157,6 +188,36 @@ func TestEntryHandler_UpdateStarred_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestEntryHandler_UpdateFocus_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockEntryService(ctrl)
+	h := handler.NewEntryHandlerHelper(mockService, nil, nil)
+
+	e := newTestEcho()
+	reqBody := map[string]interface{}{
+		"focused": true,
+		"tags":    []string{"能源", "制裁"},
+	}
+	req := newJSONRequest(http.MethodPut, "/entries/123/focus", reqBody)
+	c, rec := newTestContext(e, req)
+	setPathParams(c, map[string]string{"id": "123"})
+
+	mockService.EXPECT().
+		UpdateFocus(gomock.Any(), int64(123), true, []string{"能源", "制裁"}).
+		Return(model.EntryFocus{EntryID: 123, Focused: true, Tags: []string{"制裁", "能源"}}, nil)
+
+	err := h.UpdateFocus(c)
+	require.NoError(t, err)
+
+	var resp handler.EntryFocusResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, "123", resp.EntryID)
+	require.True(t, resp.Focused)
+	require.Equal(t, []string{"制裁", "能源"}, resp.Tags)
 }
 
 func TestEntryHandler_FetchReadable_Success(t *testing.T) {
@@ -234,6 +295,38 @@ func TestEntryHandler_GetUnreadCounts_Success(t *testing.T) {
 	assertJSONResponse(t, rec, http.StatusOK, &resp)
 	require.Equal(t, 10, resp.Counts["1"])
 	require.Equal(t, 5, resp.Counts["2"])
+}
+
+func TestEntryHandler_GetFeedAIStats_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockEntryService(ctrl)
+	h := handler.NewEntryHandlerHelper(mockService, nil, nil)
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/feed-ai-stats", nil)
+	c, rec := newTestContext(e, req)
+
+	stats := map[int64]service.FeedAIStats{
+		1: {UnreadCount: 10, AnalyzedCount: 7, PendingCount: 3},
+		2: {UnreadCount: 5, AnalyzedCount: 5, PendingCount: 0},
+	}
+	mockService.EXPECT().
+		GetFeedAIStats(gomock.Any()).
+		Return(stats, nil)
+
+	err := h.GetFeedAIStats(c)
+	require.NoError(t, err)
+
+	var resp handler.FeedAIStatsResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, 10, resp.Stats["1"].UnreadCount)
+	require.Equal(t, 7, resp.Stats["1"].AnalyzedCount)
+	require.Equal(t, 3, resp.Stats["1"].PendingCount)
+	require.Equal(t, 5, resp.Stats["2"].UnreadCount)
+	require.Equal(t, 5, resp.Stats["2"].AnalyzedCount)
+	require.Equal(t, 0, resp.Stats["2"].PendingCount)
 }
 
 func TestEntryHandler_GetStarredCount_Success(t *testing.T) {
@@ -368,4 +461,3 @@ type errorString struct {
 }
 
 func (e *errorString) Error() string { return e.s }
-

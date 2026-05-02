@@ -48,8 +48,15 @@ export interface Entry {
   publishedAt?: string
   read: boolean
   starred: boolean
+  hasAnalysis?: boolean
   createdAt: string
   updatedAt: string
+}
+
+export interface EntryFocus {
+  entryId: string
+  focused: boolean
+  tags: string[]
 }
 
 export interface EntryListResponse {
@@ -70,6 +77,16 @@ export interface EntryListParams {
 
 export interface UnreadCountsResponse {
   counts: Record<string, number>
+}
+
+export interface FeedAIStat {
+  unreadCount: number
+  analyzedCount: number
+  pendingCount: number
+}
+
+export interface FeedAIStatsResponse {
+  stats: Record<string, FeedAIStat>
 }
 
 export interface StarredCountResponse {

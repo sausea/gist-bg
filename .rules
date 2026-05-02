@@ -176,7 +176,7 @@
 | author | TEXT | | 作者 |
 | published_at | TEXT | | 发布时间 |
 | read | INTEGER | NOT NULL DEFAULT 0 | 已读状态 (0/1) |
-| starred | INTEGER | NOT NULL DEFAULT 0 | 收藏状态 (0/1) |
+| starred | INTEGER | NOT NULL DEFAULT 0 | 重点关注状态 (0/1，沿用原 starred 字段) |
 | created_at | TEXT | NOT NULL | 创建时间 |
 | updated_at | TEXT | NOT NULL | 更新时间 |
 
@@ -215,6 +215,7 @@
 - `ai.auto_translate` - 自动翻译非目标语言文章 (true/false)
 - `ai.auto_summary` - 自动生成 AI 摘要 (true/false)
 - `ai.rate_limit` - API 请求速率限制 QPS (默认 10)
+- `ai.worker_count` - AI 分析后台 worker 数量 (默认 2，修改后重启后端生效)
 - `general.fallback_user_agent` - 备用 User-Agent (当默认 UA 被拒绝时使用)
 - `general.auto_readability` - 自动开启阅读模式 (true/false)
 - `anubis.cookie.<host>` - Anubis 挑战通过后的 Cookie (按域名存储)
@@ -258,6 +259,48 @@
 | summary | TEXT | NOT NULL | 翻译后摘要 |
 | created_at | TEXT | NOT NULL | 创建时间 (RFC3339) |
 
+**ai_analyses** - AI 结构化分析结果表
+| 列名 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | INTEGER | PRIMARY KEY | Snowflake ID |
+| entry_id | INTEGER | NOT NULL, FK -> entries(id) ON DELETE CASCADE | 关联文章 |
+| is_readability | INTEGER | NOT NULL DEFAULT 0 | 是否为 Readability 内容 (0/1) |
+| language | TEXT | NOT NULL | 分析语言 |
+| tag | TEXT | NOT NULL | 结构化标签 |
+| summary | TEXT | NOT NULL | 分析摘要 |
+| entities | TEXT | NOT NULL | JSON 数组形式的实体列表 |
+| sentiment | TEXT | NOT NULL | 情绪倾向 |
+| importance | INTEGER | NOT NULL | 重要性评分 |
+| latitude | REAL | | 纬度（可选） |
+| longitude | REAL | | 经度（可选） |
+| created_at | TEXT | NOT NULL | 创建时间 (RFC3339) |
+
+**entry_focus_tags** - 重点关注标签表
+| 列名 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | INTEGER | PRIMARY KEY | Snowflake ID |
+| entry_id | INTEGER | NOT NULL, FK -> entries(id) ON DELETE CASCADE | 关联文章 |
+| tag | TEXT | NOT NULL | 用户自定义重点关注标签 |
+| created_at | TEXT | NOT NULL | 创建时间 (RFC3339) |
+| updated_at | TEXT | NOT NULL | 更新时间 (RFC3339) |
+
+**ai_analysis_jobs** - AI 分析任务状态表
+| 列名 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| id | INTEGER | PRIMARY KEY | Snowflake ID |
+| entry_id | INTEGER | NOT NULL UNIQUE, FK -> entries(id) ON DELETE CASCADE | 关联文章 |
+| feed_id | INTEGER | NOT NULL, FK -> feeds(id) ON DELETE CASCADE | 所属订阅 |
+| status | TEXT | NOT NULL | 任务状态 (queued/running/succeeded/failed) |
+| source | TEXT | NOT NULL | 触发来源 (auto/manual) |
+| content_mode | TEXT | NOT NULL | 分析内容模式 (original/readability) |
+| language | TEXT | NOT NULL | 分析语言 |
+| retry_count | INTEGER | NOT NULL DEFAULT 0 | 重试次数 |
+| error_message | TEXT | | 最近一次失败原因 |
+| created_at | TEXT | NOT NULL | 创建时间 (RFC3339) |
+| started_at | TEXT | | 开始执行时间 (RFC3339) |
+| finished_at | TEXT | | 结束执行时间 (RFC3339) |
+| updated_at | TEXT | NOT NULL | 更新时间 (RFC3339) |
+
 **domain_rate_limits** - 域名限速配置表
 | 列名 | 类型 | 约束 | 说明 |
 |------|------|------|------|
@@ -279,6 +322,11 @@ idx_entries_feed_hash    ON entries(feed_id, hash) UNIQUE
 idx_ai_summaries_entry_mode ON ai_summaries(entry_id, is_readability, language) UNIQUE
 idx_ai_translations_entry_mode ON ai_translations(entry_id, is_readability, language) UNIQUE
 idx_ai_list_translations_entry_lang ON ai_list_translations(entry_id, language) UNIQUE
+idx_ai_analyses_entry_mode ON ai_analyses(entry_id, is_readability, language) UNIQUE
+idx_ai_analysis_jobs_status_updated ON ai_analysis_jobs(status, updated_at)
+idx_ai_analysis_jobs_feed_id ON ai_analysis_jobs(feed_id)
+idx_entry_focus_tags_entry_tag ON entry_focus_tags(entry_id, tag) UNIQUE
+idx_entry_focus_tags_entry_id ON entry_focus_tags(entry_id)
 idx_domain_rate_limits_host ON domain_rate_limits(host)
 ```
 

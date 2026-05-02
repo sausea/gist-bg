@@ -15,6 +15,7 @@ type Entry struct {
 	PublishedAt     *time.Time
 	Read            bool
 	Starred         bool
+	HasAnalysis     bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

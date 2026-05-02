@@ -17,16 +17,36 @@ import (
 )
 
 type aiStatusProviderStub struct {
-	status service.AIEntryProcessingStatus
-	stats  service.AIQueueStats
+	status            service.AIEntryProcessingStatus
+	stats             service.AIQueueStats
+	items             []model.AIAnalysisQueueItem
+	err               error
+	getStatusCalls    int
+	ensureQueuedCalls int
 }
 
-func (s aiStatusProviderStub) EnsureQueued(entryID int64) service.AIEntryProcessingStatus {
+func (s *aiStatusProviderStub) GetProcessingStatus(entryID int64) service.AIEntryProcessingStatus {
+	s.getStatusCalls++
 	return s.status
 }
 
-func (s aiStatusProviderStub) GetQueueStats() service.AIQueueStats {
+func (s *aiStatusProviderStub) EnsureQueued(entryID int64) service.AIEntryProcessingStatus {
+	s.ensureQueuedCalls++
+	return s.status
+}
+
+func (s *aiStatusProviderStub) GetQueueStats() service.AIQueueStats {
 	return s.stats
+}
+
+func (s *aiStatusProviderStub) ListQueue(limit int) ([]model.AIAnalysisQueueItem, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if limit <= 0 || len(s.items) <= limit {
+		return s.items, nil
+	}
+	return s.items[:limit], nil
 }
 
 type authValidatorStub struct {
@@ -52,13 +72,14 @@ func TestAIHandler_GetProcessingStatus(t *testing.T) {
 
 	mockService := mock.NewMockAIService(ctrl)
 	h := handler.NewAIHandlerHelper(mockService)
-	handler.AttachAIStatusProviderHelper(h, aiStatusProviderStub{
+	provider := &aiStatusProviderStub{
 		status: service.AIEntryProcessingStatus{
 			Queued:     true,
 			Running:    false,
 			Processing: true,
 		},
-	})
+	}
+	handler.AttachAIStatusProviderHelper(h, provider)
 
 	e := newTestEcho()
 	req := newJSONRequest(http.MethodGet, "/ai/status/123", nil)
@@ -74,6 +95,8 @@ func TestAIHandler_GetProcessingStatus(t *testing.T) {
 	require.True(t, resp.Queued)
 	require.True(t, resp.Processing)
 	require.False(t, resp.Running)
+	require.Equal(t, 1, provider.getStatusCalls)
+	require.Equal(t, 0, provider.ensureQueuedCalls)
 }
 
 func TestAIHandler_ListStoredAnalyses(t *testing.T) {
@@ -85,7 +108,7 @@ func TestAIHandler_ListStoredAnalyses(t *testing.T) {
 	handler.AttachAIDailyReportAccessHelper(h, authValidatorStub{}, dailyReportKeyProviderStub{
 		key: "daily-report-secret",
 	})
-	handler.AttachAIStatusProviderHelper(h, aiStatusProviderStub{
+	handler.AttachAIStatusProviderHelper(h, &aiStatusProviderStub{
 		stats: service.AIQueueStats{
 			PendingCount: 5,
 			QueuedCount:  3,
@@ -155,6 +178,87 @@ func TestAIHandler_ListStoredAnalyses_Unauthorized(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestAIHandler_ListAnalysisQueue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockAIService(ctrl)
+	h := handler.NewAIHandlerHelper(mockService)
+	handler.AttachAIDailyReportAccessHelper(h, authValidatorStub{}, dailyReportKeyProviderStub{
+		key: "daily-report-secret",
+	})
+
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	title := "分析中的文章"
+	url := "https://example.com/queued"
+	handler.AttachAIStatusProviderHelper(h, &aiStatusProviderStub{
+		stats: service.AIQueueStats{
+			PendingCount: 3,
+			QueuedCount:  2,
+			RunningCount: 1,
+			FailedCount:  1,
+			Processing:   true,
+		},
+		items: []model.AIAnalysisQueueItem{
+			{
+				ID:          1,
+				EntryID:     101,
+				FeedID:      202,
+				FeedType:    "article",
+				EntryTitle:  &title,
+				EntryURL:    &url,
+				FeedTitle:   "World Feed",
+				Status:      model.AIAnalysisJobStatusRunning,
+				Source:      model.AIAnalysisJobSourceAuto,
+				ContentMode: model.AIAnalysisContentModeReadability,
+				Language:    "zh-CN",
+				RetryCount:  1,
+				CreatedAt:   now,
+				UpdatedAt:   now.Add(2 * time.Minute),
+			},
+		},
+	})
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/ai/queue?limit=50", nil)
+	req.Header.Set("X-Gist-API-Key", "daily-report-secret")
+	c, rec := newTestContext(e, req)
+
+	err := h.ListAnalysisQueue(c)
+	require.NoError(t, err)
+
+	var resp handler.ListAnalysisQueueResponse
+	assertJSONResponse(t, rec, http.StatusOK, &resp)
+	require.Equal(t, 3, resp.PendingCount)
+	require.Equal(t, 2, resp.QueuedCount)
+	require.Equal(t, 1, resp.RunningCount)
+	require.Equal(t, 1, resp.FailedCount)
+	require.True(t, resp.Processing)
+	require.Len(t, resp.Items, 1)
+	require.Equal(t, int64(101), resp.Items[0].EntryID)
+	require.Equal(t, model.AIAnalysisJobStatusRunning, resp.Items[0].Status)
+	require.Equal(t, now.Format(time.RFC3339), resp.Items[0].CreatedAt)
+}
+
+func TestAIHandler_ListAnalysisQueue_Unauthorized(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockService := mock.NewMockAIService(ctrl)
+	h := handler.NewAIHandlerHelper(mockService)
+	handler.AttachAIDailyReportAccessHelper(h, authValidatorStub{}, dailyReportKeyProviderStub{
+		key: "daily-report-secret",
+	})
+
+	e := newTestEcho()
+	req := newJSONRequest(http.MethodGet, "/ai/queue", nil)
+	c, rec := newTestContext(e, req)
+
+	err := h.ListAnalysisQueue(c)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
 func TestAIHandler_GetDailyAnalysisReport(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -164,7 +268,7 @@ func TestAIHandler_GetDailyAnalysisReport(t *testing.T) {
 	handler.AttachAIDailyReportAccessHelper(h, authValidatorStub{}, dailyReportKeyProviderStub{
 		key: "daily-report-secret",
 	})
-	handler.AttachAIStatusProviderHelper(h, aiStatusProviderStub{
+	handler.AttachAIStatusProviderHelper(h, &aiStatusProviderStub{
 		stats: service.AIQueueStats{
 			PendingCount: 5,
 			QueuedCount:  3,

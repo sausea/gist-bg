@@ -26,8 +26,9 @@ type AIHandler struct {
 }
 
 type aiProcessingStatusProvider interface {
-	EnsureQueued(entryID int64) service.AIEntryProcessingStatus
+	GetProcessingStatus(entryID int64) service.AIEntryProcessingStatus
 	GetQueueStats() service.AIQueueStats
+	ListQueue(limit int) ([]model.AIAnalysisQueueItem, error)
 }
 
 type dailyReportTokenValidator interface {
@@ -99,6 +100,8 @@ type storedAnalysisResponse struct {
 	FeedTitle     string   `json:"feedTitle"`
 	Author        *string  `json:"author,omitempty"`
 	PublishedAt   *string  `json:"publishedAt,omitempty"`
+	Focused       bool     `json:"focused"`
+	FocusTags     []string `json:"focusTags"`
 	IsReadability bool     `json:"isReadability"`
 	Language      string   `json:"language"`
 	Tag           string   `json:"tag"`
@@ -113,6 +116,37 @@ type storedAnalysisResponse struct {
 
 type listStoredAnalysesResponse struct {
 	Items []storedAnalysisResponse `json:"items"`
+}
+
+type analysisQueueItemResponse struct {
+	ID           int64   `json:"id"`
+	EntryID      int64   `json:"entryId"`
+	FeedID       int64   `json:"feedId"`
+	FeedType     string  `json:"feedType"`
+	EntryTitle   *string `json:"entryTitle,omitempty"`
+	EntryURL     *string `json:"entryUrl,omitempty"`
+	FeedTitle    string  `json:"feedTitle"`
+	Author       *string `json:"author,omitempty"`
+	PublishedAt  *string `json:"publishedAt,omitempty"`
+	Status       string  `json:"status"`
+	Source       string  `json:"source"`
+	ContentMode  string  `json:"contentMode"`
+	Language     string  `json:"language"`
+	RetryCount   int     `json:"retryCount"`
+	ErrorMessage *string `json:"errorMessage,omitempty"`
+	CreatedAt    string  `json:"createdAt"`
+	StartedAt    *string `json:"startedAt,omitempty"`
+	FinishedAt   *string `json:"finishedAt,omitempty"`
+	UpdatedAt    string  `json:"updatedAt"`
+}
+
+type listAnalysisQueueResponse struct {
+	PendingCount int                         `json:"pendingCount"`
+	QueuedCount  int                         `json:"queuedCount"`
+	RunningCount int                         `json:"runningCount"`
+	FailedCount  int                         `json:"failedCount"`
+	Processing   bool                        `json:"processing"`
+	Items        []analysisQueueItemResponse `json:"items"`
 }
 
 type dailyReportSentimentResponse struct {
@@ -137,11 +171,14 @@ type dailyAnalysisReportResponse struct {
 	Date         string                          `json:"date"`
 	Total        int                             `json:"total"`
 	PendingCount int                             `json:"pendingCount"`
+	FocusedTotal int                             `json:"focusedTotal"`
 	Sentiment    dailyReportSentimentResponse    `json:"sentiment"`
 	TopAnalyses  []storedAnalysisResponse        `json:"topAnalyses"`
 	TopTags      []dailyReportCountItemResponse  `json:"topTags"`
 	TopEntities  []dailyReportCountItemResponse  `json:"topEntities"`
 	TopFeeds     []dailyReportFeedMetricResponse `json:"topFeeds"`
+	FocusedTags  []dailyReportCountItemResponse  `json:"focusedTags"`
+	FocusedItems []storedAnalysisResponse        `json:"focusedItems"`
 	Overview     string                          `json:"overview,omitempty"`
 	RiskReview   string                          `json:"riskReview,omitempty"`
 	TrendOutlook string                          `json:"trendOutlook,omitempty"`
@@ -177,6 +214,7 @@ func (h *AIHandler) RegisterRoutes(g *echo.Group) {
 
 func (h *AIHandler) RegisterPublicRoutes(g *echo.Group) {
 	g.GET("/ai/analyses", h.ListStoredAnalyses)
+	g.GET("/ai/queue", h.ListAnalysisQueue)
 	g.GET("/ai/reports/daily", h.GetDailyAnalysisReport)
 }
 
@@ -190,7 +228,7 @@ func (h *AIHandler) GetProcessingStatus(c echo.Context) error {
 		return c.JSON(http.StatusOK, processingStatusResponse{})
 	}
 
-	status := h.statusProvider.EnsureQueued(entryID)
+	status := h.statusProvider.GetProcessingStatus(entryID)
 	return c.JSON(http.StatusOK, processingStatusResponse{
 		Queued:     status.Queued,
 		Running:    status.Running,
@@ -239,6 +277,59 @@ func (h *AIHandler) ListStoredAnalyses(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, listStoredAnalysesResponse{Items: resp})
+}
+
+func (h *AIHandler) ListAnalysisQueue(c echo.Context) error {
+	authorized, err := h.authorizeExternalAIRead(c)
+	if err != nil {
+		return err
+	}
+	if !authorized {
+		return nil
+	}
+
+	limit := 50
+	if value := strings.TrimSpace(c.QueryParam("limit")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			return c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid limit"})
+		}
+		if parsed > 200 {
+			parsed = 200
+		}
+		limit = parsed
+	}
+
+	stats := h.queueStats()
+	if h.statusProvider == nil {
+		return c.JSON(http.StatusOK, listAnalysisQueueResponse{
+			PendingCount: stats.PendingCount,
+			QueuedCount:  stats.QueuedCount,
+			RunningCount: stats.RunningCount,
+			FailedCount:  stats.FailedCount,
+			Processing:   stats.Processing,
+			Items:        []analysisQueueItemResponse{},
+		})
+	}
+
+	items, err := h.statusProvider.ListQueue(limit)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{Error: err.Error()})
+	}
+
+	resp := make([]analysisQueueItemResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, toAnalysisQueueItemResponse(item))
+	}
+
+	return c.JSON(http.StatusOK, listAnalysisQueueResponse{
+		PendingCount: stats.PendingCount,
+		QueuedCount:  stats.QueuedCount,
+		RunningCount: stats.RunningCount,
+		FailedCount:  stats.FailedCount,
+		Processing:   stats.Processing,
+		Items:        resp,
+	})
 }
 
 func (h *AIHandler) GetDailyAnalysisReport(c echo.Context) error {
@@ -312,6 +403,8 @@ func toStoredAnalysisResponse(item model.StoredAIAnalysis) storedAnalysisRespons
 		EntryURL:      item.EntryURL,
 		FeedTitle:     item.FeedTitle,
 		Author:        item.Author,
+		Focused:       item.Focused,
+		FocusTags:     append([]string{}, item.FocusTags...),
 		IsReadability: item.IsReadability,
 		Language:      item.Language,
 		Tag:           item.Tag,
@@ -330,6 +423,40 @@ func toStoredAnalysisResponse(item model.StoredAIAnalysis) storedAnalysisRespons
 	return resp
 }
 
+func toAnalysisQueueItemResponse(item model.AIAnalysisQueueItem) analysisQueueItemResponse {
+	resp := analysisQueueItemResponse{
+		ID:           item.ID,
+		EntryID:      item.EntryID,
+		FeedID:       item.FeedID,
+		FeedType:     item.FeedType,
+		EntryTitle:   item.EntryTitle,
+		EntryURL:     item.EntryURL,
+		FeedTitle:    item.FeedTitle,
+		Author:       item.Author,
+		Status:       item.Status,
+		Source:       item.Source,
+		ContentMode:  item.ContentMode,
+		Language:     item.Language,
+		RetryCount:   item.RetryCount,
+		ErrorMessage: item.ErrorMessage,
+		CreatedAt:    item.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    item.UpdatedAt.Format(time.RFC3339),
+	}
+	if item.PublishedAt != nil {
+		formatted := item.PublishedAt.Format(time.RFC3339)
+		resp.PublishedAt = &formatted
+	}
+	if item.StartedAt != nil {
+		formatted := item.StartedAt.Format(time.RFC3339)
+		resp.StartedAt = &formatted
+	}
+	if item.FinishedAt != nil {
+		formatted := item.FinishedAt.Format(time.RFC3339)
+		resp.FinishedAt = &formatted
+	}
+	return resp
+}
+
 func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int) dailyAnalysisReportResponse {
 	if report == nil {
 		return dailyAnalysisReportResponse{
@@ -338,6 +465,8 @@ func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int
 			TopTags:      []dailyReportCountItemResponse{},
 			TopEntities:  []dailyReportCountItemResponse{},
 			TopFeeds:     []dailyReportFeedMetricResponse{},
+			FocusedTags:  []dailyReportCountItemResponse{},
+			FocusedItems: []storedAnalysisResponse{},
 		}
 	}
 
@@ -345,6 +474,7 @@ func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int
 		Date:         report.Date,
 		Total:        report.Total,
 		PendingCount: pendingCount,
+		FocusedTotal: report.FocusedTotal,
 		Overview:     report.Overview,
 		RiskReview:   report.RiskReview,
 		TrendOutlook: report.TrendOutlook,
@@ -354,10 +484,12 @@ func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int
 			Negative: report.Sentiment.Negative,
 			Other:    report.Sentiment.Other,
 		},
-		TopAnalyses: make([]storedAnalysisResponse, 0, len(report.TopAnalyses)),
-		TopTags:     make([]dailyReportCountItemResponse, 0, len(report.TopTags)),
-		TopEntities: make([]dailyReportCountItemResponse, 0, len(report.TopEntities)),
-		TopFeeds:    make([]dailyReportFeedMetricResponse, 0, len(report.TopFeeds)),
+		TopAnalyses:  make([]storedAnalysisResponse, 0, len(report.TopAnalyses)),
+		TopTags:      make([]dailyReportCountItemResponse, 0, len(report.TopTags)),
+		TopEntities:  make([]dailyReportCountItemResponse, 0, len(report.TopEntities)),
+		TopFeeds:     make([]dailyReportFeedMetricResponse, 0, len(report.TopFeeds)),
+		FocusedTags:  make([]dailyReportCountItemResponse, 0, len(report.FocusedTags)),
+		FocusedItems: make([]storedAnalysisResponse, 0, len(report.FocusedItems)),
 	}
 
 	for _, item := range report.TopAnalyses {
@@ -382,15 +514,28 @@ func toDailyAnalysisReportResponse(report *model.AIDailyReport, pendingCount int
 			Count:     item.Count,
 		})
 	}
+	for _, item := range report.FocusedTags {
+		resp.FocusedTags = append(resp.FocusedTags, dailyReportCountItemResponse{
+			Name:  item.Name,
+			Count: item.Count,
+		})
+	}
+	for _, item := range report.FocusedItems {
+		resp.FocusedItems = append(resp.FocusedItems, toStoredAnalysisResponse(item))
+	}
 
 	return resp
 }
 
 func (h *AIHandler) queuePendingCount() int {
+	return h.queueStats().PendingCount
+}
+
+func (h *AIHandler) queueStats() service.AIQueueStats {
 	if h.statusProvider == nil {
-		return 0
+		return service.AIQueueStats{}
 	}
-	return h.statusProvider.GetQueueStats().PendingCount
+	return h.statusProvider.GetQueueStats()
 }
 
 // Summarize generates an AI summary of the content.

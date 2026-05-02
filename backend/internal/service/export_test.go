@@ -36,6 +36,7 @@ const (
 	KeyAIAutoSummary        = keyAIAutoSummary
 	KeyAIAutoAnalysis       = keyAIAutoAnalysis
 	KeyAIRateLimit          = keyAIRateLimit
+	KeyAIWorkerCount        = keyAIWorkerCount
 	KeyAIDailyReportAPIKey  = keyAIDailyReportAPIKey
 	KeyAIAnalysisArchiveDir = keyAIAnalysisArchiveDir
 	KeyNetworkEnabled       = keyNetworkEnabled
